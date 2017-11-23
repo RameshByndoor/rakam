@@ -19,6 +19,7 @@ import org.rakam.util.AlreadyExistsException;
 import org.rakam.util.JsonHelper;
 import org.rakam.util.NotExistsException;
 import org.rakam.util.RakamException;
+import org.rakam.util.SqlUtil;
 
 import javax.inject.Inject;
 
@@ -38,18 +39,16 @@ import static org.rakam.util.ValidationUtil.checkCollection;
 import static org.rakam.util.ValidationUtil.checkProject;
 
 public class PostgresqlMaterializedViewService extends MaterializedViewService {
-    private final SqlParser parser = new SqlParser();
-
     private final PostgresqlQueryExecutor queryExecutor;
     private final QueryMetadataStore database;
-    private final ProjectConfig projectConfig;
+    private final Clock clock;
 
     @Inject
-    public PostgresqlMaterializedViewService(ProjectConfig projectConfig, PostgresqlQueryExecutor queryExecutor, QueryMetadataStore database) {
+    public PostgresqlMaterializedViewService(PostgresqlQueryExecutor queryExecutor, QueryMetadataStore database, Clock clock) {
         super(database, queryExecutor, '"');
-        this.projectConfig = projectConfig;
         this.queryExecutor = queryExecutor;
         this.database = database;
+        this.clock = clock;
     }
 
     @Override
@@ -59,10 +58,7 @@ public class PostgresqlMaterializedViewService extends MaterializedViewService {
             materializedView.validateQuery();
 
             StringBuilder builder = new StringBuilder();
-            Query statement;
-            synchronized (parser) {
-                statement = (Query) parser.createStatement(materializedView.query);
-            }
+            Query statement = (Query) SqlUtil.parseSql(materializedView.query);
 
             new RakamSqlFormatter.Formatter(builder, name -> queryExecutor
                     .formatTableReference(project, name, Optional.empty(), new HashMap<String, String>() {
@@ -118,7 +114,7 @@ public class PostgresqlMaterializedViewService extends MaterializedViewService {
         String type = materializedView.incremental ? "TABLE" : "MATERIALIZED VIEW";
         QueryExecution queryExecution = queryExecutor.executeRawStatement(format("DROP %s %s.%s",
                 type,
-                checkProject(project, '\"'), checkCollection(MATERIALIZED_VIEW_PREFIX + materializedView.tableName)));
+                checkProject(project, '"'), checkCollection(MATERIALIZED_VIEW_PREFIX + materializedView.tableName)));
         return queryExecution.getResult().thenApply(result -> {
             if(!result.isFailed())
                 database.deleteMaterializedView(project, name);
@@ -135,14 +131,11 @@ public class PostgresqlMaterializedViewService extends MaterializedViewService {
 
         String tableName = queryExecutor.formatTableReference(project,
                 QualifiedName.of("materialized", materializedView.tableName), Optional.empty(), ImmutableMap.of());
-        Query statement;
-        synchronized (sqlParser) {
-            statement = (Query) sqlParser.createStatement(materializedView.query);
-        }
+        Query statement = (Query) SqlUtil.parseSql(materializedView.query);
 
         Map<String, String> sessionProperties = new HashMap<>();
         if (!materializedView.incremental) {
-            if (!materializedView.needsUpdate(Clock.systemUTC()) || !database.updateMaterializedView(project, materializedView, f)) {
+            if (!materializedView.needsUpdate(clock) || !database.updateMaterializedView(project, materializedView, f)) {
                 return new MaterializedViewExecution(null, tableName);
             }
 
@@ -158,17 +151,15 @@ public class PostgresqlMaterializedViewService extends MaterializedViewService {
         else {
             String materializedTableReference = tableName;
 
-            Instant lastUpdated = materializedView.lastUpdate;
-            Instant now = Instant.now();
-            boolean needsUpdate = lastUpdated == null || Duration
-                    .between(now, lastUpdated).compareTo(materializedView.updateInterval) > 0;
+            boolean willBeUpdated = materializedView.needsUpdate(clock) && database.updateMaterializedView(project, materializedView, f);
 
             QueryExecution queryExecution;
-            if (needsUpdate && database.updateMaterializedView(project, materializedView, f)) {
+            Instant now = Instant.now();
+            if (willBeUpdated) {
                 String query = formatSql(statement,
                         name -> {
-                            String predicate = lastUpdated != null ? format("between timezone('UTC', to_timestamp(%d)) and  timezone('UTC', to_timestamp(%d))",
-                                    lastUpdated.getEpochSecond(), now.getEpochSecond()) :
+                            String predicate =  materializedView.lastUpdate != null ? format("between timezone('UTC', to_timestamp(%d)) and  timezone('UTC', to_timestamp(%d))",
+                                    materializedView.lastUpdate.getEpochSecond(), now.getEpochSecond()) :
                                     format(" < timezone('UTC', to_timestamp(%d))", now.getEpochSecond());
 
                             String collection = queryExecutor.formatTableReference(project, name, Optional.empty(),
@@ -182,11 +173,11 @@ public class PostgresqlMaterializedViewService extends MaterializedViewService {
             }
             else {
                 queryExecution = QueryExecution.completedQueryExecution("", QueryResult.empty());
-                f.complete(lastUpdated);
+                f.complete(materializedView.lastUpdate);
             }
 
             String reference;
-            if (!needsUpdate && !materializedView.realTime) {
+            if (!willBeUpdated && !materializedView.realTime) {
                 reference = materializedTableReference;
             }
             else {
@@ -195,7 +186,7 @@ public class PostgresqlMaterializedViewService extends MaterializedViewService {
                             String collection = format("(SELECT * FROM %s %s) data",
                                     queryExecutor.formatTableReference(project, name, Optional.empty(), ImmutableMap.of()),
                                     format("WHERE \"$server_time\" > to_timestamp(%d)",
-                                            (lastUpdated != null ? lastUpdated : now).getEpochSecond()));
+                                            ( materializedView.lastUpdate != null ?  materializedView.lastUpdate : now).getEpochSecond()));
                             return collection;
                         }, '"');
 

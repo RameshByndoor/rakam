@@ -60,6 +60,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 import static com.google.common.base.Charsets.UTF_8;
+import static io.netty.buffer.Unpooled.wrappedBuffer;
 import static io.netty.handler.codec.http.HttpHeaders.Names.ACCESS_CONTROL_ALLOW_ORIGIN;
 import static io.netty.handler.codec.http.HttpHeaders.Names.ACCESS_CONTROL_EXPOSE_HEADERS;
 import static io.netty.handler.codec.http.HttpHeaders.Names.ORIGIN;
@@ -75,6 +76,7 @@ import static org.rakam.analysis.ApiKeyService.AccessKeyType.MASTER_KEY;
 import static org.rakam.analysis.ApiKeyService.AccessKeyType.WRITE_KEY;
 import static org.rakam.collection.EventCollectionHttpService.getHeaderList;
 import static org.rakam.collection.EventCollectionHttpService.setBrowser;
+import static org.rakam.server.http.HttpServer.errorMessage;
 import static org.rakam.server.http.HttpServer.returnError;
 
 @Path("/user")
@@ -278,8 +280,7 @@ public class UserHttpService
 
         Object anonymousId = mergeRequest.anonymousId;
 
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK,
-                Unpooled.wrappedBuffer(OK_MESSAGE));
+        DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, wrappedBuffer(OK_MESSAGE));
         setBrowser(request, response);
 
         if (anonymousId == null) {
@@ -317,7 +318,7 @@ public class UserHttpService
             InetAddress socketAddress = ((InetSocketAddress) request.context().channel()
                     .remoteAddress()).getAddress();
 
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, Unpooled.wrappedBuffer(OK_MESSAGE));
+            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, wrappedBuffer(OK_MESSAGE));
             List<Cookie> cookies = mapEvent(mapper ->
                     mapper.map(project, req.data, new HttpRequestParams(request), socketAddress));
 
@@ -354,17 +355,25 @@ public class UserHttpService
             InetAddress socketAddress = ((InetSocketAddress) request.context().channel()
                     .remoteAddress()).getAddress();
 
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, Unpooled.wrappedBuffer(OK_MESSAGE));
+            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, wrappedBuffer(OK_MESSAGE));
             List<Cookie> cookies = mapEvent(mapper ->
                     mapper.map(project, req.data, new HttpRequestParams(request), socketAddress));
 
-            service.batch(project, req.data);
+            service.batch(project, req.data).whenComplete((result, ex) -> {
+                setBrowser(request, response);
 
-            setBrowser(request, response);
-            if (cookies != null && !cookies.isEmpty()) {
-                response.headers().add(SET_COOKIE, STRICT.encode(cookies));
-            }
-            request.response(response).end();
+                if(ex != null) {
+                    request.response(JsonHelper.encode(errorMessage("An error occurred", INTERNAL_SERVER_ERROR)),
+                            INTERNAL_SERVER_ERROR);
+                    LOGGER.error(ex, "Error while performing batch user operation");
+                    return;
+                }
+
+                if (cookies != null && !cookies.isEmpty()) {
+                    response.headers().add(SET_COOKIE, STRICT.encode(cookies));
+                }
+                request.response(response).end();
+            });
         });
     }
 
@@ -407,7 +416,7 @@ public class UserHttpService
             }
 
             DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK,
-                    Unpooled.wrappedBuffer(OK_MESSAGE));
+                    wrappedBuffer(OK_MESSAGE));
             setBrowser(request, response);
 
             try {
@@ -486,7 +495,7 @@ public class UserHttpService
 
             String project = apiKeyService.getProjectOfApiKey(req.api.apiKey, WRITE_KEY);
 
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, Unpooled.wrappedBuffer(OK_MESSAGE));
+            DefaultFullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1, OK, wrappedBuffer(OK_MESSAGE));
             response.headers().set(ACCESS_CONTROL_ALLOW_ORIGIN, request.headers().get(ORIGIN));
 
             List<Cookie> cookies = mapProperties(project, req, request);

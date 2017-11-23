@@ -6,6 +6,7 @@ import org.rakam.analysis.datasource.CustomDataSourceService;
 import org.rakam.analysis.metadata.Metastore;
 import org.rakam.collection.FieldDependencyBuilder;
 import org.rakam.config.ProjectConfig;
+import org.rakam.postgresql.PostgresqlModule;
 import org.rakam.postgresql.analysis.PostgresqlMaterializedViewService;
 import org.rakam.postgresql.analysis.PostgresqlMetastore;
 import org.rakam.postgresql.report.PostgresqlPseudoContinuousQueryService;
@@ -28,11 +29,11 @@ public class TestPostgresqlContinuousQueryService extends TestContinuousQuerySer
         InMemoryQueryMetadataStore queryMetadataStore = new InMemoryQueryMetadataStore();
         JDBCPoolDataSource dataSource = JDBCPoolDataSource.getOrCreateDataSource(testingPostgresqlServer.getPostgresqlConfig());
 
-        metastore = new PostgresqlMetastore(dataSource, new EventBus());
+        metastore = new PostgresqlMetastore(dataSource, new PostgresqlModule.PostgresqlVersion(dataSource), new EventBus(), new ProjectConfig());
 
         PostgresqlQueryExecutor queryExecutor = new PostgresqlQueryExecutor(new ProjectConfig(), dataSource, metastore, new CustomDataSourceService(dataSource), false);
         QueryExecutorService executorService = new QueryExecutorService(queryExecutor, metastore,
-                new PostgresqlMaterializedViewService(new ProjectConfig(), queryExecutor, queryMetadataStore), Clock.systemUTC(), '"');
+                new PostgresqlMaterializedViewService(queryExecutor, queryMetadataStore, Clock.systemUTC()), Clock.systemUTC(), '"');
         continuousQueryService = new PostgresqlPseudoContinuousQueryService(queryMetadataStore, executorService, queryExecutor);
     }
 

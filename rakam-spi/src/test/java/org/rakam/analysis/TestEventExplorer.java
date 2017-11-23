@@ -48,9 +48,9 @@ public abstract class TestEventExplorer
             .put(DAY_OF_WEEK, ImmutableSet.of(of("test", "Thursday", 100L)))
             .put(HOUR, ImmutableSet.of(of("test", parse("1970-01-01T00:00:00Z"), 36L), of("test", parse("1970-01-01T01:00:00Z"), 36L), of("test", parse("1970-01-01T02:00:00Z"), 28L)))
             .put(DAY, ImmutableSet.of(of("test", LocalDate.parse("1970-01-01"), 100L)))
-            .put(WEEK, ImmutableSet.of(of("test", parse("1969-12-29T00:00:00Z"), 100L)))
-            .put(MONTH, ImmutableSet.of(of("test", parse("1970-01-01T00:00:00Z"), 100L)))
-            .put(YEAR, ImmutableSet.of(of("test", parse("1970-01-01T00:00:00Z"), 100L))).build();
+            .put(WEEK, ImmutableSet.of(of("test", LocalDate.parse("1969-12-29"), 100L)))
+            .put(MONTH, ImmutableSet.of(of("test", LocalDate.parse("1970-01-01"), 100L)))
+            .put(YEAR, ImmutableSet.of(of("test", LocalDate.parse("1970-01-01"), 100L))).build();
 
     private static ZonedDateTime parse(String value) {
         return ZonedDateTime.parse(value).withZoneSameLocal(ZoneId.of("UTC"));
@@ -374,9 +374,9 @@ public abstract class TestEventExplorer
                 .put(DAY_OF_WEEK, ImmutableSet.of(of("Thursday", "test", 100L)))
                 .put(HOUR, ImmutableSet.of(of(parse("1970-01-01T00:00:00Z"), "test", 36L), of(parse("1970-01-01T01:00:00Z"), "test", 36L), of(parse("1970-01-01T02:00:00Z"), "test", 28L)))
                 .put(DAY, ImmutableSet.of(of(LocalDate.parse("1970-01-01"), "test", 100L)))
-                .put(WEEK, ImmutableSet.of(of(parse("1969-12-29T00:00:00Z"), "test", 100L)))
-                .put(MONTH, ImmutableSet.of(of(parse("1970-01-01T00:00:00Z"), "test", 100L)))
-                .put(YEAR, ImmutableSet.of(of(parse("1970-01-01T00:00:00Z"), "test", 100L)))
+                .put(WEEK, ImmutableSet.of(of(LocalDate.parse("1969-12-29"), "test", 100L)))
+                .put(MONTH, ImmutableSet.of(of(LocalDate.parse("1970-01-01"), "test", 100L)))
+                .put(YEAR, ImmutableSet.of(of(LocalDate.parse("1970-01-01"), "test", 100L)))
                 .build();
 
         getEventExplorer().getExtraDimensions("test").values().stream().flatMap(e -> e.stream())

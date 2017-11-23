@@ -32,14 +32,14 @@ import org.rakam.server.http.annotations.ApiParam;
 import org.rakam.server.http.annotations.Authorization;
 import org.rakam.server.http.annotations.BodyParam;
 import org.rakam.server.http.annotations.JsonRequest;
-import org.rakam.ui.ScheduledTaskUIHttpService.Parameter;
+import org.rakam.plugin.Parameter;
 import org.rakam.util.JsonHelper;
 import org.rakam.util.RakamException;
 import org.rakam.util.SuccessMessage;
 import org.rakam.util.javascript.ILogger;
 import org.rakam.util.javascript.JSCodeCompiler;
 import org.rakam.util.javascript.JSConfigManager;
-import org.rakam.util.javascript.JSCodeLoggerService;
+import org.rakam.util.javascript.JSCodeJDBCLoggerService;
 import org.rakam.util.lock.LockService;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.GeneratedKeys;
@@ -92,7 +92,7 @@ public class ScheduledTaskHttpService
     private final LockService lockService;
     private final ImmutableList<EventMapper> eventMappers;
     private final String timestampToEpoch;
-    private final JSCodeLoggerService service;
+    private final JSCodeJDBCLoggerService service;
     private final ProjectConfig projectConfig;
 
     @Inject
@@ -102,7 +102,7 @@ public class ScheduledTaskHttpService
             JsonEventDeserializer eventDeserializer,
             JSCodeCompiler jsCodeCompiler,
             LockService lockService,
-            JSCodeLoggerService service,
+            JSCodeJDBCLoggerService service,
             ConfigManager configManager,
             Set<EventMapper> eventMapperSet,
             @Named("timestamp_function") String timestampToEpoch,
@@ -171,7 +171,7 @@ public class ScheduledTaskHttpService
                     }
                     long now = System.currentTimeMillis();
                     ListenableFuture<Void> run;
-                    JSCodeLoggerService.PersistentLogger logger;
+                    JSCodeJDBCLoggerService.PersistentLogger logger;
                     try {
                             String prefix = "scheduled-task." + task.id;
                         JSConfigManager jsConfigManager = new JSConfigManager(configManager, task.project, prefix);
@@ -224,7 +224,7 @@ public class ScheduledTaskHttpService
     @ApiOperation(value = "List tasks", authorizations = @Authorization(value = "master_key"))
     @JsonRequest
     @Path("/get_logs")
-    public List<JSCodeLoggerService.LogEntry> getLogs(@Named("project") String project, @ApiParam(value = "start", required = false) Instant
+    public List<JSCodeJDBCLoggerService.LogEntry> getLogs(@Named("project") String project, @ApiParam(value = "start", required = false) Instant
             start, @ApiParam(value = "end", required = false) Instant end, @ApiParam("id") int id)
     {
         LockService.Lock lock = null;
@@ -288,7 +288,7 @@ public class ScheduledTaskHttpService
 
         long now = System.currentTimeMillis();
         String prefix = "scheduled-task." + id;
-        JSCodeLoggerService.PersistentLogger logger = service.createLogger(project, prefix);
+        JSCodeJDBCLoggerService.PersistentLogger logger = service.createLogger(project, prefix);
         ListenableFuture<Void> future;
         try {
             Map<String, Object> first;
@@ -461,10 +461,10 @@ public class ScheduledTaskHttpService
 
     public static class Environment
     {
-        public final List<JSCodeLoggerService.LogEntry> logs;
+        public final List<JSCodeJDBCLoggerService.LogEntry> logs;
         public final Map<String, Object> configs;
 
-        public Environment(List<JSCodeLoggerService.LogEntry> logs, Map<String, Object> configs)
+        public Environment(List<JSCodeJDBCLoggerService.LogEntry> logs, Map<String, Object> configs)
         {
             this.logs = logs;
             this.configs = configs;
@@ -477,7 +477,7 @@ public class ScheduledTaskHttpService
             try {
                 Invocable engine = jsCodeCompiler.createEngine(
                         script, logger,
-                        jsCodeCompiler.getEventStore(project, deserializer, eventStore, eventMappers),
+                        jsCodeCompiler.getEventStore(project, deserializer, eventStore, eventMappers, logger),
                         configManager);
 
                 Map<String, Object> collect = Optional.ofNullable(parameters)

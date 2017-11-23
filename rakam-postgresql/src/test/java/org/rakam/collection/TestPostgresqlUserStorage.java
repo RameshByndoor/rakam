@@ -12,6 +12,8 @@ import org.rakam.config.ProjectConfig;
 import org.rakam.plugin.user.AbstractUserService;
 import org.rakam.plugin.user.UserPluginConfig;
 import org.rakam.postgresql.PostgresqlConfigManager;
+import org.rakam.postgresql.PostgresqlModule;
+import org.rakam.postgresql.analysis.PostgresqlEventStore;
 import org.rakam.postgresql.analysis.PostgresqlMaterializedViewService;
 import org.rakam.postgresql.analysis.PostgresqlMetastore;
 import org.rakam.postgresql.plugin.user.PostgresqlUserService;
@@ -42,17 +44,18 @@ public class TestPostgresqlUserStorage
         JDBCPoolDataSource dataSource = JDBCPoolDataSource.getOrCreateDataSource(testingPostgresqlServer.getPostgresqlConfig(), "set time zone 'UTC'");
 
         EventBus eventBus = new EventBus();
-        metastore = new PostgresqlMetastore(dataSource, eventBus);
+        metastore = new PostgresqlMetastore(dataSource, new PostgresqlModule.PostgresqlVersion(dataSource), eventBus, new ProjectConfig());
 
         PostgresqlQueryExecutor queryExecutor = new PostgresqlQueryExecutor(new ProjectConfig(), dataSource, metastore, new CustomDataSourceService(dataSource), false);
 
-        PostgresqlMaterializedViewService materializedViewService = new PostgresqlMaterializedViewService(new ProjectConfig(), queryExecutor, queryMetadataStore);
+        PostgresqlMaterializedViewService materializedViewService = new PostgresqlMaterializedViewService(queryExecutor, queryMetadataStore, Clock.systemUTC());
 
         QueryExecutorService queryExecutorService = new QueryExecutorService(queryExecutor, metastore, materializedViewService, Clock.systemUTC(), '"');
         configManager = new PostgresqlConfigManager(dataSource);
         configManager.setup();
         PostgresqlUserStorage userStorage = new PostgresqlUserStorage(queryExecutorService, materializedViewService, configManager, queryExecutor);
-        userService = new PostgresqlUserService(new ProjectConfig(), userStorage, metastore, queryExecutor);
+        PostgresqlEventStore postgresqlEventStore = new PostgresqlEventStore(dataSource, new PostgresqlModule.PostgresqlVersion(dataSource), new FieldDependencyBuilder().build());
+        userService = new PostgresqlUserService(new ProjectConfig(), configManager, postgresqlEventStore, userStorage, metastore, queryExecutor);
         super.setUp();
     }
 

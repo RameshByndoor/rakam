@@ -14,45 +14,18 @@
 package org.rakam.postgresql.report;
 
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 import org.rakam.analysis.ContinuousQueryService;
 import org.rakam.analysis.MaterializedViewService;
-import org.rakam.analysis.metadata.Metastore;
 import org.rakam.config.ProjectConfig;
-import org.rakam.report.QueryExecution;
 import org.rakam.report.QueryExecutorService;
-import org.rakam.report.QueryResult;
 import org.rakam.report.eventexplorer.AbstractEventExplorer;
 import org.rakam.report.realtime.AggregationType;
-import org.rakam.util.RakamException;
-import org.rakam.util.ValidationUtil;
 
 import javax.inject.Inject;
-
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeFormatterBuilder;
-import java.time.temporal.ChronoField;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
-import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static java.lang.String.format;
-import static java.time.ZoneOffset.UTC;
 import static org.rakam.analysis.EventExplorer.TimestampTransformation.*;
-import static org.rakam.util.DateTimeUtils.TIMESTAMP_FORMATTER;
-import static org.rakam.util.ValidationUtil.checkCollection;
-import static org.rakam.util.ValidationUtil.checkProject;
-import static org.rakam.util.ValidationUtil.checkTableColumn;
 
 public class PostgresqlEventExplorer
         extends AbstractEventExplorer
@@ -67,19 +40,15 @@ public class PostgresqlEventExplorer
             .put(DAY_OF_WEEK, "rtrim(to_char(%s, 'Day'))")
             .put(HOUR, "date_trunc('hour', %s)")
             .put(DAY, "cast(%s as date)")
-            .put(MONTH, "date_trunc('month', %s)")
-            .put(YEAR, "date_trunc('year', %s)")
+            .put(MONTH, "cast(date_trunc('month', %s) as date)")
+            .put(YEAR, "cast(date_trunc('year', %s) as date)")
             .build();
-    private final QueryExecutorService executorService;
-    private final ProjectConfig projectConfig;
 
     @Inject
     public PostgresqlEventExplorer(ProjectConfig projectConfig, QueryExecutorService service, MaterializedViewService materializedViewService,
             ContinuousQueryService continuousQueryService)
     {
         super(projectConfig, service, materializedViewService, continuousQueryService, timestampMapping);
-        this.executorService = service;
-        this.projectConfig = projectConfig;
     }
 
     @Override
@@ -114,33 +83,5 @@ public class PostgresqlEventExplorer
         }
 
         return column;
-    }
-
-    @Override
-    public CompletableFuture<QueryResult> getEventStatistics(String project, Optional<Set<String>> collections, Optional<String> dimension, LocalDate startDate, LocalDate endDate, ZoneId timezone)
-    {
-        CompletableFuture<QueryResult> eventStatistics = super.getEventStatistics(project, collections, dimension, startDate, endDate, timezone);
-        return eventStatistics.thenApply(result -> {
-//            if (!result.isFailed()) {
-//                List<List<Object>> result1 = result.getResult();
-//                if (dimension.isPresent() && TimestampTransformation.fromPrettyName(dimension.get()).get() == HOUR_OF_DAY) {
-//                    ZoneOffset offset = timezone.getRules().getOffset(Instant.now());
-//                    DateTimeFormatter dateTimeFormatter = new DateTimeFormatterBuilder()
-//                            .appendValue(ChronoField.HOUR_OF_DAY, 2)
-//                            .appendLiteral(':')
-//                            .appendValue(ChronoField.MINUTE_OF_HOUR, 2)
-//                            .toFormatter();
-//
-//                    for (List<Object> objects : result1) {
-//                        String format = LocalTime.parse(objects.get(1).toString()).atOffset(UTC)
-//                                .withOffsetSameInstant(offset)
-//                                .format(dateTimeFormatter);
-//                        objects.set(1, format);
-//                    }
-//                }
-//            }
-
-            return result;
-        });
     }
 }

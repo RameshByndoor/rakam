@@ -19,7 +19,9 @@ import org.rakam.plugin.MaterializedView;
 import org.rakam.util.LogUtil;
 import org.rakam.util.MaterializedViewNotExists;
 import org.rakam.util.NotExistsException;
+import org.rakam.util.RakamClient;
 import org.rakam.util.RakamException;
+import org.rakam.util.SqlUtil;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -41,7 +43,6 @@ import static org.rakam.report.QueryResult.EXECUTION_TIME;
 
 public class QueryExecutorService
 {
-    private final SqlParser parser = new SqlParser();
     public static final int DEFAULT_QUERY_RESULT_COUNT = 50000;
     public static final int MAX_QUERY_RESULT_LIMIT = 1000000;
 
@@ -61,6 +62,11 @@ public class QueryExecutorService
     }
 
     public QueryExecution executeQuery(String project, String sqlQuery, Optional<QuerySampling> sample, String defaultSchema, ZoneId zoneId, int limit)
+    {
+        return executeQuery(project, sqlQuery, sample, defaultSchema, zoneId, limit, null);
+    }
+
+    public QueryExecution executeQuery(String project, String sqlQuery, Optional<QuerySampling> sample, String defaultSchema, ZoneId zoneId, int limit, String apiKey)
     {
         if (!projectExists(project)) {
             throw new NotExistsException("Project");
@@ -85,14 +91,15 @@ public class QueryExecutorService
                 .filter(m -> m.queryExecution != null)
                 .collect(Collectors.toList());
 
+        QueryExecution execution;
         if (queryExecutions.isEmpty()) {
-            QueryExecution execution = executor.executeRawQuery(query, zoneId, sessionParameters);
+            execution = executor.executeRawQuery(query, zoneId, sessionParameters, apiKey);
             if (materializedViews.isEmpty()) {
                 return execution;
             }
             else {
                 Map<String, Long> collect = materializedViews.entrySet().stream().collect(Collectors.toMap(v -> v.getKey().tableName, v -> v.getKey().lastUpdate != null ? v.getKey().lastUpdate.toEpochMilli() : -1));
-                return new DelegateQueryExecution(execution, result -> {
+                execution = new DelegateQueryExecution(execution, result -> {
                     result.setProperty("materializedViews", collect);
                     return result;
                 });
@@ -104,7 +111,7 @@ public class QueryExecutorService
                     .map(e -> e.queryExecution)
                     .collect(Collectors.toList());
 
-            return new DelegateQueryExecution(new ChainQueryExecution(executions, query, (results) -> {
+            execution = new DelegateQueryExecution(new ChainQueryExecution(executions, query, (results) -> {
                 for (MaterializedViewExecution queryExecution : queryExecutions) {
                     QueryResult result = queryExecution.queryExecution.getResult().join();
                     if (result.isFailed()) {
@@ -119,7 +126,7 @@ public class QueryExecutorService
                     }
                 }
 
-                return executor.executeRawQuery(query, zoneId, sessionParameters);
+                return executor.executeRawQuery(query, zoneId, sessionParameters, apiKey);
             }), result -> {
                 if (!result.isFailed()) {
                     Map<String, Long> collect = materializedViews.entrySet().stream()
@@ -133,17 +140,19 @@ public class QueryExecutorService
                 return result;
             });
         }
+
+        return execution;
     }
 
     public QueryExecution executeQuery(String project, String sqlQuery)
     {
-        return executeQuery(project, sqlQuery, Optional.empty(), "collection",
+        return executeQuery(project, sqlQuery, Optional.empty(), null,
                 ZoneOffset.UTC, DEFAULT_QUERY_RESULT_COUNT);
     }
 
     public QueryExecution executeQuery(String project, String sqlQuery, ZoneId timezone)
     {
-        return executeQuery(project, sqlQuery, Optional.empty(), "collection",
+        return executeQuery(project, sqlQuery, Optional.empty(), null,
                 timezone, DEFAULT_QUERY_RESULT_COUNT);
     }
 
@@ -177,20 +186,18 @@ public class QueryExecutorService
     {
         Query statement;
         Function<QualifiedName, String> tableNameMapper = tableNameMapper(project, materializedViews, sample, defaultSchema, sessionParameters);
-        synchronized (parser) {
-            Statement queryStatement = parser.createStatement(query);
-            if ((queryStatement instanceof Query)) {
-                statement = (Query) queryStatement;
-            }
-            else if ((queryStatement instanceof Call)) {
-                StringBuilder builder = new StringBuilder();
-                new RakamSqlFormatter.Formatter(builder, tableNameMapper, escapeIdentifier)
-                        .process(queryStatement, 1);
-                return builder.toString();
-            }
-            else {
-                throw new RakamException(queryStatement.getClass().getSimpleName() + " is not supported", BAD_REQUEST);
-            }
+        Statement queryStatement = SqlUtil.parseSql(query);
+        if ((queryStatement instanceof Query)) {
+            statement = (Query) queryStatement;
+        }
+        else if ((queryStatement instanceof Call)) {
+            StringBuilder builder = new StringBuilder();
+            new RakamSqlFormatter.Formatter(builder, tableNameMapper, escapeIdentifier)
+                    .process(queryStatement, 1);
+            return builder.toString();
+        }
+        else {
+            throw new RakamException(queryStatement.getClass().getSimpleName() + " is not supported", BAD_REQUEST);
         }
 
         StringBuilder builder = new StringBuilder();
@@ -253,7 +260,7 @@ public class QueryExecutorService
         StringBuilder builder = new StringBuilder();
         Query queryStatement;
         try {
-            queryStatement = (Query) parser.createStatement(checkNotNull(query, "query is required"));
+            queryStatement = (Query) SqlUtil.parseSql(checkNotNull(query, "query is required"));
         }
         catch (Exception e) {
             throw new RakamException("Unable to parse query: " + e.getMessage(), BAD_REQUEST);

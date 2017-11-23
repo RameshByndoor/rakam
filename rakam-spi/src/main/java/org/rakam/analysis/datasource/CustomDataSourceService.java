@@ -7,10 +7,8 @@ import com.google.common.collect.ImmutableMap;
 import org.rakam.analysis.JDBCPoolDataSource;
 import org.rakam.collection.FieldType;
 import org.rakam.collection.SchemaField;
-import org.rakam.server.http.annotations.ApiOperation;
+import org.rakam.plugin.Parameter;
 import org.rakam.server.http.annotations.ApiParam;
-import org.rakam.server.http.annotations.Authorization;
-import org.rakam.server.http.annotations.JsonRequest;
 import org.rakam.util.AlreadyExistsException;
 import org.rakam.util.JsonHelper;
 import org.rakam.util.RakamException;
@@ -18,11 +16,12 @@ import org.rakam.util.SuccessMessage;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.Query;
+import org.skife.jdbi.v2.StatementContext;
+import org.skife.jdbi.v2.tweak.ResultSetMapper;
 
 import javax.annotation.PostConstruct;
 import javax.inject.Inject;
 import javax.inject.Named;
-import javax.ws.rs.Path;
 
 import java.net.URL;
 import java.sql.Connection;
@@ -34,6 +33,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
@@ -43,11 +45,13 @@ import static org.rakam.util.JDBCUtil.fromSql;
 public class CustomDataSourceService
 {
     private final DBI dbi;
+    private final ExecutorService executor;
 
     @Inject
     public CustomDataSourceService(@Named("report.metadata.store.jdbc") JDBCPoolDataSource dataSource)
     {
         this.dbi = new DBI(dataSource);
+        this.executor = Executors.newCachedThreadPool();
     }
 
     @PostConstruct
@@ -109,71 +113,76 @@ public class CustomDataSourceService
         }
     }
 
-    public List<SchemaField> schemaTable(String project, String schema, String table)
+    public CompletableFuture<List<SchemaField>> schemaTable(String project, String schema, String table)
     {
         CustomDataSource customDataSource = getDatabase(project, schema);
         List<SchemaField> builder = new ArrayList<>();
 
-        SupportedCustomDatabase source = SupportedCustomDatabase.getAdapter(customDataSource.type);
-        try (Connection conn = source.getDataSource().openConnection(customDataSource.options)) {
-            ResultSet dbColumns = conn.getMetaData().getColumns(null, customDataSource.options.getSchema(), table, null);
-
-            while (dbColumns.next()) {
-                String columnName = dbColumns.getString("COLUMN_NAME");
-                FieldType fieldType;
-                try {
-                    fieldType = fromSql(dbColumns.getInt("DATA_TYPE"), dbColumns.getString("TYPE_NAME"));
-                }
-                catch (UnsupportedOperationException e) {
-                    continue;
-                }
-                builder.add(new SchemaField(columnName, fieldType));
-            }
-
-            return builder;
-        }
-        catch (SQLException e) {
-            throw Throwables.propagate(e);
-        }
-    }
-
-    public Map<String, List<String>> schemaDatabases(String project)
-    {
-        ImmutableMap.Builder<String, List<String>> schemas = ImmutableMap.builder();
-
-        CustomDataSourceList customDataSourceList = listDatabases(project);
-        for (CustomDataSource customDataSource : customDataSourceList.customDataSources) {
-            List<String> builder = new ArrayList<>();
-
+        return CompletableFuture.supplyAsync(() -> {
             SupportedCustomDatabase source = SupportedCustomDatabase.getAdapter(customDataSource.type);
             try (Connection conn = source.getDataSource().openConnection(customDataSource.options)) {
-                ResultSet dbColumns = conn.getMetaData().getTables(null, customDataSource.options.getSchema(), null, null);
+                ResultSet dbColumns = conn.getMetaData().getColumns(null, customDataSource.options.getSchema(), table, null);
 
                 while (dbColumns.next()) {
-                    if (!"TABLE".equals(dbColumns.getString("table_type"))) {
+                    String columnName = dbColumns.getString("COLUMN_NAME");
+                    FieldType fieldType;
+                    try {
+                        fieldType = fromSql(dbColumns.getInt("DATA_TYPE"), dbColumns.getString("TYPE_NAME"));
+                    }
+                    catch (UnsupportedOperationException e) {
                         continue;
                     }
-                    builder.add(dbColumns.getString("table_name"));
+                    builder.add(new SchemaField(columnName, fieldType));
                 }
+
+                return builder;
             }
             catch (SQLException e) {
-                // TODO: report error
-                continue;
+                throw Throwables.propagate(e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Map<String, List<String>>> schemaDatabases(String project)
+    {
+        return CompletableFuture.supplyAsync(() -> {
+
+            ImmutableMap.Builder<String, List<String>> schemas = ImmutableMap.builder();
+
+            CustomDataSourceList customDataSourceList = listDatabases(project);
+            for (CustomDataSource customDataSource : customDataSourceList.customDataSources) {
+                List<String> builder = new ArrayList<>();
+
+                SupportedCustomDatabase source = SupportedCustomDatabase.getAdapter(customDataSource.type);
+                try (Connection conn = source.getDataSource().openConnection(customDataSource.options)) {
+                    ResultSet dbColumns = conn.getMetaData().getTables(null, customDataSource.options.getSchema(), null, null);
+
+                    while (dbColumns.next()) {
+                        if (!"TABLE".equals(dbColumns.getString("table_type"))) {
+                            continue;
+                        }
+                        builder.add(dbColumns.getString("table_name"));
+                    }
+                }
+                catch (SQLException e) {
+                    // TODO: report error
+                    continue;
+                }
+
+                schemas.put(customDataSource.schemaName, builder);
             }
 
-            schemas.put(customDataSource.schemaName, builder);
-        }
-
-        if (!customDataSourceList.customFileSources.isEmpty()) {
-            Map<String, List<SchemaField>> builder = new HashMap<>();
-            for (Map.Entry<String, RemoteTable> customFileSource : customDataSourceList.customFileSources.entrySet()) {
-                builder.put(customFileSource.getKey(),
-                        Optional.ofNullable(customFileSource.getValue().columns)
-                                .orElse(ImmutableList.of()));
+            if (!customDataSourceList.customFileSources.isEmpty()) {
+                Map<String, List<SchemaField>> builder = new HashMap<>();
+                for (Map.Entry<String, RemoteTable> customFileSource : customDataSourceList.customFileSources.entrySet()) {
+                    builder.put(customFileSource.getKey(),
+                            Optional.ofNullable(customFileSource.getValue().columns)
+                                    .orElse(ImmutableList.of()));
+                }
             }
-        }
 
-        return schemas.build();
+            return schemas.build();
+        }, executor);
     }
 
     public CustomDataSource getDatabase(@Named("project") String project, String schema)
@@ -183,15 +192,24 @@ public class CustomDataSourceService
                     .bind("project", project)
                     .bind("schema_name", schema.toLowerCase(Locale.ENGLISH));
 
-            CustomDataSource first = bind.map((index, r, ctx) -> {
-                return new CustomDataSource(r.getString(1), schema, JsonHelper.read(r.getString(2), JDBCSchemaConfig.class));
-            }).first();
+            CustomDataSource first = bind.map((index, r, ctx) ->
+                    new CustomDataSource(r.getString(1), schema, JsonHelper.read(r.getString(2), JDBCSchemaConfig.class))).first();
 
             if (first == null) {
                 throw new RakamException(NOT_FOUND);
             }
 
             return first;
+        }
+    }
+
+    public static class ThirdPartyCustomDatabase {
+        public final List<Parameter> parameters;
+        public final String type;
+
+        public ThirdPartyCustomDatabase(String type, List<Parameter> parameters) {
+            this.parameters = parameters;
+            this.type = type;
         }
     }
 
@@ -261,9 +279,6 @@ public class CustomDataSourceService
         }
     }
 
-    @ApiOperation(value = "Add file data-source", authorizations = @Authorization(value = "master_key"))
-    @Path("/add/file")
-    @JsonRequest
     public SuccessMessage addFile(@Named("project") String project, @ApiParam("tableName") String tableName, @ApiParam("options") DiscoverableRemoteTable hook)
     {
         try (Handle handle = dbi.open()) {
@@ -293,10 +308,7 @@ public class CustomDataSourceService
         }
     }
 
-    @ApiOperation(value = "Add file data-source", authorizations = @Authorization(value = "master_key"))
-    @Path("/remove/file")
-    @JsonRequest
-    public SuccessMessage removeFile(@Named("project") String project, @ApiParam("tableName") String tableName)
+    public SuccessMessage removeFile(String project, String tableName)
     {
         try (Handle handle = dbi.open()) {
             int execute = handle.createStatement("DELETE FROM custom_file_source WHERE project = :project AND table_name = :table_name")
@@ -312,10 +324,7 @@ public class CustomDataSourceService
         }
     }
 
-    @ApiOperation(value = "Add file data-source", authorizations = @Authorization(value = "master_key"))
-    @Path("/remove/database")
-    @JsonRequest
-    public SuccessMessage removeDatabase(@Named("project") String project, @ApiParam("schemaName") String schemaName)
+    public SuccessMessage removeDatabase(String project, String schemaName)
     {
         try (Handle handle = dbi.open()) {
             int execute = handle.createStatement("DELETE FROM custom_data_source WHERE project = :project AND schema_name = :schema_name")
@@ -331,10 +340,7 @@ public class CustomDataSourceService
         }
     }
 
-    @ApiOperation(value = "Test database", authorizations = @Authorization(value = "master_key"))
-    @Path("/test/database")
-    @JsonRequest
-    public SuccessMessage testDatabase(@Named("project") String project, String type, JDBCSchemaConfig options)
+    public SuccessMessage testDatabase(String project, String type, JDBCSchemaConfig options)
     {
         SupportedCustomDatabase optionalFunction = SupportedCustomDatabase.getAdapter(type);
         Optional<String> test = optionalFunction.getDataSource().test(options);
@@ -345,10 +351,7 @@ public class CustomDataSourceService
         return SuccessMessage.success();
     }
 
-    @ApiOperation(value = "Test database", authorizations = @Authorization(value = "master_key"))
-    @Path("/test/file")
-    @JsonRequest
-    public SuccessMessage testFile(@Named("project") String project, DiscoverableRemoteTable hook)
+    public SuccessMessage testFile(String project, DiscoverableRemoteTable hook)
     {
         ExternalFileCustomDataSource source = new ExternalFileCustomDataSource();
         Optional<String> test = source.test(hook.getTable());

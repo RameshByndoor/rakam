@@ -10,7 +10,7 @@ import org.rakam.util.ConditionalModule;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 
 @AutoService(RakamModule.class)
-@ConditionalModule(config = "authentication", value = "ldap")
+@ConditionalModule(config = "ui.authentication", value = "ldap")
 public class LdapModule
         extends RakamModule
 {

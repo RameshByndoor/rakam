@@ -2,7 +2,6 @@ package org.rakam.util.javascript;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.log.Level;
@@ -16,11 +15,10 @@ import org.rakam.analysis.ConfigManager;
 import org.rakam.collection.Event;
 import org.rakam.collection.EventCollectionHttpService;
 import org.rakam.collection.EventList;
-import org.rakam.util.javascript.JSCodeLoggerService.LogEntry;
 import org.rakam.collection.JsonEventDeserializer;
 import org.rakam.plugin.EventMapper;
 import org.rakam.plugin.EventStore;
-import org.rakam.plugin.RAsyncHttpClient;
+import org.rakam.util.RAsyncHttpClient;
 import org.rakam.util.CryptUtil;
 import org.rakam.util.JsonHelper;
 import org.rakam.util.RakamException;
@@ -34,23 +32,19 @@ import javax.script.ScriptContext;
 import javax.script.ScriptEngine;
 import javax.script.ScriptException;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URL;
 import java.net.UnknownHostException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 import static com.fasterxml.jackson.core.JsonToken.START_OBJECT;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static java.lang.String.format;
 import static org.rakam.plugin.EventMapper.RequestParams.EMPTY_PARAMS;
 
 public class JSCodeCompiler
@@ -75,7 +69,7 @@ public class JSCodeCompiler
     public JSCodeCompiler(
             ConfigManager configManager,
             @Named("rakam-client") RAsyncHttpClient httpClient,
-            JSCodeLoggerService loggerService,
+            JSLoggerService loggerService,
             JavascriptConfig config)
     {
         this(configManager, httpClient,
@@ -99,7 +93,7 @@ public class JSCodeCompiler
             localhost = InetAddress.getLocalHost();
         }
         catch (UnknownHostException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -109,13 +103,15 @@ public class JSCodeCompiler
         private final String project;
         private final JsonEventDeserializer jsonEventDeserializer;
         private final List<EventMapper> eventMapperSet;
+        private final ILogger logger;
 
-        public JSEventStore(String project, JsonEventDeserializer jsonEventDeserializer, EventStore eventStore, List<EventMapper> eventMapperSet)
+        public JSEventStore(String project, JsonEventDeserializer jsonEventDeserializer, EventStore eventStore, List<EventMapper> eventMapperSet, ILogger logger)
         {
             this.project = project;
             this.jsonEventDeserializer = jsonEventDeserializer;
             this.eventStore = eventStore;
             this.eventMapperSet = eventMapperSet;
+            this.logger = logger;
         }
 
         public void store(String jsonRaw)
@@ -143,7 +139,10 @@ public class JSCodeCompiler
                     eventMapper -> eventMapper.mapAsync(new EventList(Event.EventContext.empty(), list),
                             EMPTY_PARAMS, localhost, HttpHeaders.EMPTY_HEADERS));
 
-            eventStore.storeBatch(list);
+            int[] ints = eventStore.storeBatch(list);
+            if(ints.length > 0) {
+                logger.error(format("Failed to save events: %s", Arrays.stream(ints).boxed().map(i -> i + "").collect(Collectors.joining(", "))));
+            }
         }
     }
 
@@ -178,9 +177,9 @@ public class JSCodeCompiler
         return new JSConfigManager(configManager, project, prefix);
     }
 
-    public JSEventStore getEventStore(String project, JsonEventDeserializer jsonEventDeserializer, EventStore eventStore, List<EventMapper> eventMappers)
+    public JSEventStore getEventStore(String project, JsonEventDeserializer jsonEventDeserializer, EventStore eventStore, List<EventMapper> eventMappers, ILogger logger)
     {
-        return new JSEventStore(project, jsonEventDeserializer, eventStore, eventMappers);
+        return new JSEventStore(project, jsonEventDeserializer, eventStore, eventMappers, logger);
     }
 
     public Invocable createEngine(String code, ILogger logger, JSEventStore eventStore, IJSConfigManager configManager)
@@ -239,9 +238,9 @@ public class JSCodeCompiler
     public static class TestLogger
             implements ILogger
     {
-        List<LogEntry> entries = new ArrayList();
+        List<JSLoggerService.LogEntry> entries = new ArrayList();
 
-        public List<LogEntry> getEntries()
+        public List<JSLoggerService.LogEntry> getEntries()
         {
             return ImmutableList.copyOf(entries);
         }
@@ -249,25 +248,25 @@ public class JSCodeCompiler
         @Override
         public void debug(String value)
         {
-            entries.add(new LogEntry("", Level.DEBUG, value, Instant.now()));
+            entries.add(new JSLoggerService.LogEntry("", Level.DEBUG, value, Instant.now()));
         }
 
         @Override
         public void warn(String value)
         {
-            entries.add(new LogEntry("", Level.WARN, value, Instant.now()));
+            entries.add(new JSLoggerService.LogEntry("", Level.WARN, value, Instant.now()));
         }
 
         @Override
         public void info(String value)
         {
-            entries.add(new LogEntry("", Level.INFO, value, Instant.now()));
+            entries.add(new JSLoggerService.LogEntry("", Level.INFO, value, Instant.now()));
         }
 
         @Override
         public void error(String value)
         {
-            entries.add(new LogEntry("", Level.ERROR, value, Instant.now()));
+            entries.add(new JSLoggerService.LogEntry("", Level.ERROR, value, Instant.now()));
         }
     }
 

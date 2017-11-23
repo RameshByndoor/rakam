@@ -152,15 +152,11 @@ public class JsonEventDeserializer
                         throw new RakamException("properties must be an object", BAD_REQUEST);
                     }
 
-                    if (collection == null) {
+                    if (collection == null || api == null) {
                         propertiesBuffer = jp.readValueAs(TokenBuffer.class);
                     }
                     else {
                         if (project == null) {
-                            if (api == null) {
-                                throw new RakamException("api parameter is required", BAD_REQUEST);
-                            }
-
                             if (api.apiKey == null) {
                                 throw new RakamException("api.api_key is required", BAD_REQUEST);
                             }
@@ -211,7 +207,14 @@ public class JsonEventDeserializer
                         project = apiKeyService.getProjectOfApiKey(api.apiKey, WRITE_KEY);
                     }
                     catch (RakamException e) {
-                        project = apiKeyService.getProjectOfApiKey(api.apiKey, MASTER_KEY);
+                        try {
+                            project = apiKeyService.getProjectOfApiKey(api.apiKey, MASTER_KEY);
+                        }
+                        catch (RakamException e1) {
+                            if(e1.getStatusCode() == FORBIDDEN) {
+                                throw new RakamException("write_key or master_key is invalid.", FORBIDDEN);
+                            }
+                        }
                         masterKey = true;
                     }
                 }

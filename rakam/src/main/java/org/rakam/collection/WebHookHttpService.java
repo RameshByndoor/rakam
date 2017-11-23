@@ -26,7 +26,7 @@ import jdk.nashorn.api.scripting.ScriptObjectMirror;
 import org.rakam.analysis.ApiKeyService;
 import org.rakam.analysis.JDBCPoolDataSource;
 import org.rakam.util.javascript.JSCodeCompiler;
-import org.rakam.util.javascript.JSCodeLoggerService;
+import org.rakam.util.javascript.JSCodeJDBCLoggerService;
 import org.rakam.plugin.EventStore;
 import org.rakam.server.http.HttpRequestException;
 import org.rakam.server.http.HttpService;
@@ -100,7 +100,7 @@ public class WebHookHttpService
     private final EventStore eventStore;
     private final ObjectMapper jsonMapper;
     private final JSCodeCompiler jsCodeCompiler;
-    private final JSCodeLoggerService loggerService;
+    private final JSCodeJDBCLoggerService loggerService;
 
     @Inject
     public WebHookHttpService(
@@ -108,40 +108,42 @@ public class WebHookHttpService
             JsonEventDeserializer deserializer,
             ApiKeyService apiKeyService,
             JSCodeCompiler jsCodeCompiler,
-            JSCodeLoggerService loggerService,
+            JSCodeJDBCLoggerService loggerService,
             EventStore eventStore)
     {
         this.apiKeyService = apiKeyService;
         this.jsCodeCompiler = jsCodeCompiler;
         this.loggerService = loggerService;
-        functions = CacheBuilder.newBuilder().softValues().build(new CacheLoader<WebHookIdentifier, Invocable>()
-        {
+        functions = CacheBuilder.newBuilder()
+                .expireAfterWrite(5, TimeUnit.MINUTES)
+                .build(new CacheLoader<WebHookIdentifier, Invocable>()
+                {
 
-            @Override
-            public Invocable load(WebHookIdentifier key)
-                    throws Exception
-            {
-                WebHook webHook = get(key.project, key.identifier);
-                String prefix = "webhook." + key.project + "." + key.identifier;
-                return jsCodeCompiler.createEngine(
-                        webHook.script,
-                        loggerService.createLogger(key.project, prefix),
-                        null,
-                        jsCodeCompiler.createConfigManager(key.project, prefix), (engine, bindings) -> {
-                            Map<String, Parameter> parameters = webHook.parameters;
-                            Map<String, Object> map = new HashMap<>();
-                            parameters.forEach((k,v) -> map.put(k, v.value));
+                    @Override
+                    public Invocable load(WebHookIdentifier key)
+                            throws Exception
+                    {
+                        WebHook webHook = get(key.project, key.identifier);
+                        String prefix = "webhook." + key.project + "." + key.identifier;
+                        return jsCodeCompiler.createEngine(
+                                webHook.script,
+                                loggerService.createLogger(key.project, prefix),
+                                null,
+                                jsCodeCompiler.createConfigManager(key.project, prefix), (engine, bindings) -> {
+                                    Map<String, Parameter> parameters = webHook.parameters;
+                                    Map<String, Object> map = new HashMap<>();
+                                    parameters.forEach((k, v) -> map.put(k, v.value));
 
-                            bindings.put("$$params", map);
-                            try {
-                                engine.eval("var $$module = function(queryParams, body, headers) { return module(queryParams, body, $$params, headers)}");
-                            }
-                            catch (ScriptException e) {
-                                throw Throwables.propagate(e);
-                            }
-                        });
-            }
-        });
+                                    bindings.put("$$params", map);
+                                    try {
+                                        engine.eval("var $$module = function(queryParams, body, headers) { return module(queryParams, body, $$params, headers)}");
+                                    }
+                                    catch (ScriptException e) {
+                                        throw Throwables.propagate(e);
+                                    }
+                                });
+                    }
+                });
         this.dbi = new DBI(dataSource);
         this.eventStore = eventStore;
         jsonMapper = new ObjectMapper();
@@ -253,7 +255,6 @@ public class WebHookHttpService
 
                         ScriptObjectMirror json = (ScriptObjectMirror) ((ScriptObjectMirror) body).eval("JSON");
                         Object stringify = json.callMember("stringify", body);
-
 
                         try {
                             Event event = jsonMapper.readerFor(Event.class)
@@ -432,7 +433,7 @@ public class WebHookHttpService
     @ApiOperation(value = "Get logs", authorizations = @Authorization(value = "master_key"))
     @JsonRequest
     @Path("/get_logs")
-    public List<JSCodeLoggerService.LogEntry> getLogs(@Named("project") String project, @ApiParam("identifier") String identifier, @ApiParam(value = "start", required = false) Instant start, @ApiParam(value = "end", required = false) Instant end)
+    public List<JSCodeJDBCLoggerService.LogEntry> getLogs(@Named("project") String project, @ApiParam("identifier") String identifier, @ApiParam(value = "start", required = false) Instant start, @ApiParam(value = "end", required = false) Instant end)
     {
         return loggerService.getLogs(project, start, end, "webhook." + project + "." + identifier);
     }

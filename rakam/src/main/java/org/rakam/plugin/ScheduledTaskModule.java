@@ -8,8 +8,10 @@ import com.google.inject.multibindings.Multibinder;
 import com.google.inject.name.Named;
 import com.google.inject.name.Names;
 import com.mysql.jdbc.MySQLConnection;
+import io.airlift.configuration.Config;
 import org.postgresql.PGConnection;
 import org.rakam.analysis.JDBCPoolDataSource;
+import org.rakam.config.TaskConfig;
 import org.rakam.util.lock.LockService;
 import org.rakam.plugin.tasks.ScheduledTaskHttpService;
 import org.rakam.server.http.HttpService;
@@ -20,6 +22,8 @@ import javax.inject.Inject;
 import java.sql.Connection;
 import java.sql.SQLException;
 
+import static io.airlift.configuration.ConfigBinder.configBinder;
+
 @AutoService(RakamModule.class)
 @ConditionalModule(config = "tasks.enable", value = "true")
 public class ScheduledTaskModule
@@ -28,10 +32,10 @@ public class ScheduledTaskModule
     @Override
     protected void setup(Binder binder)
     {
+        configBinder(binder).bindConfig(TaskConfig.class);
         Multibinder<HttpService> httpServices = Multibinder.newSetBinder(binder, HttpService.class);
         httpServices.addBinding().to(ScheduledTaskHttpService.class);
 
-        binder.bind(LockService.class).toProvider(LockServiceProvider.class);
         binder.bind(String.class).annotatedWith(Names.named("timestamp_function"))
                 .toProvider(DatabaseFunction.class);
     }

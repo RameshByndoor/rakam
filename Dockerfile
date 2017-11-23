@@ -10,9 +10,7 @@ RUN echo 'org.rakam=INFO\n\
 io.netty=INFO' > log.properties
 
 RUN [ -s config.properties ] || (echo "store.adapter=postgresql\n\
-store.adapter.postgresql.url=postgres://rakam:dummy@rakam-db:5432/rakam\n\
 plugin.user.enabled=true\n\
-event.stream.enabled=true\n\
 event-explorer.enabled=true\n\
 custom-data-source.enabled=true\n\
 user.funnel-analysis.enabled=true\n\
@@ -20,10 +18,9 @@ plugin.user.enable-user-mapping=true\n\
 user.retention-analysis.enabled=true\n\
 plugin.geoip.enabled=true\n\
 plugin.user.storage=postgresql\n\
-event-stream=server\n\
 http.server.address=0.0.0.0:9999\n\
 plugin.user.storage.identifier-column=id\n\
-plugin.geoip.database.url=file://tmp/GeoLite2-City.mmdb\n" > config.properties && (env | grep RAKAM_CONFIG_ | awk  '{gsub(/\_/,".",$0); print substr(tolower($0), 14)}' >> config.properties))
+plugin.geoip.database.url=file://tmp/GeoLite2-City.mmdb\n" > config.properties)
 
 RUN apt-get update \
     # Rakam can automatically download & extract the database but we do this
@@ -31,12 +28,13 @@ RUN apt-get update \
     && wget -P /tmp http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.mmdb.gz \
     && gzip -d /tmp/GeoLite2-City.mmdb.gz
 
+# Make environment variable active
+RUN cd /var/app/rakam/rakam/target/rakam-*-bundle/rakam-*/etc/ && echo '\n-Denv=RAKAM_CONFIG' >> jvm.config
+
 WORKDIR /var/app/rakam
 
 EXPOSE 9999
 
-#-Dlog.enable-console=false
-#-Dlog.output-file=../logs/app.log
-ENTRYPOINT rakam/target/rakam-*-bundle/rakam-*/bin/launcher run --config ../config.properties -Denv=RAKAM_CONFIG
+ENTRYPOINT rakam/target/rakam-*-bundle/rakam-*/bin/launcher run --config ../config.properties
 
 RUN apt-get clean

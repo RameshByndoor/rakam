@@ -52,20 +52,21 @@ public class JDBCQueryExecution
         implements QueryExecution
 {
     private final static Logger LOGGER = Logger.get(JDBCQueryExecution.class);
+    private static final ZoneId UTC = ZoneId.of("UTC");
 
     private final CompletableFuture<QueryResult> result;
     private final String query;
     private final ZoneId zoneId;
+    private final boolean update;
     private Statement statement;
-    private static final ZoneId UTC = ZoneId.of("UTC");
 
     public JDBCQueryExecution(ConnectionFactory connectionPool, String query, boolean update, Optional<ZoneId> optionalZoneId, boolean applyZone)
     {
         this.query = query;
         zoneId = applyZone ? optionalZoneId.map(v -> v == ZoneOffset.UTC ? UTC : v).orElse(UTC) : null;
+        this.update = update;
 
-        // TODO: unnecessary threads will be spawn
-        Supplier<QueryResult> task = () -> {
+        this.result = CompletableFuture.supplyAsync(() -> {
             final QueryResult queryResult;
             try (Connection connection = connectionPool.openConnection()) {
                 statement = connection.createStatement();
@@ -106,14 +107,12 @@ public class JDBCQueryExecution
                     LOGGER.error(e, "Internal query execution error");
                     error = new QueryError(e.getMessage(), null, null, null, null);
                 }
-                LOGGER.debug(e, format("Error while executing Postgresql query: \n%s", query));
+                LOGGER.debug(e, format("Error while executing JDBC query: \n%s", query));
                 return QueryResult.errorResult(error, query);
             }
 
             return queryResult;
-        };
-
-        this.result = CompletableFuture.supplyAsync(task, QUERY_EXECUTOR);
+        }, QUERY_EXECUTOR);
     }
 
     @Override
@@ -142,7 +141,7 @@ public class JDBCQueryExecution
     @Override
     public void kill()
     {
-        if (statement != null) {
+        if (statement != null && !update) {
             try {
                 statement.cancel();
             }
@@ -207,14 +206,19 @@ public class JDBCQueryExecution
                             break;
                         case TIMESTAMP:
                             String timestamp = resultSet.getString(columnIndex);
-                            if(zoneId != null) {
+                            if(zoneId != null && timestamp != null) {
                                 object = connection.unwrap(PgConnection.class).getTimestampUtils().toLocalDateTime(timestamp).atZone(zoneId);
                             } else {
                                 object = resultSet.getTimestamp(columnIndex);
                             }
                             break;
                         case DATE:
-                            object = LocalDate.parse(resultSet.getString(columnIndex));
+                            String string = resultSet.getString(columnIndex);
+                            if(string != null) {
+                                object = LocalDate.parse(string);
+                            } else {
+                                object = null;
+                            }
                             break;
                         case TIME:
                             Time time = resultSet.getTime(columnIndex);

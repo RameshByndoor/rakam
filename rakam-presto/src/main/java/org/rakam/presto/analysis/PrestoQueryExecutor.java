@@ -14,17 +14,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.collect.ImmutableMap;
 import com.google.inject.Singleton;
 import io.airlift.units.Duration;
-import org.rakam.analysis.datasource.CustomDataSourceService;
-import org.rakam.analysis.datasource.RemoteTable;
+import org.rakam.analysis.datasource.*;
 import org.rakam.analysis.metadata.Metastore;
 import org.rakam.collection.SchemaField;
 import org.rakam.config.JDBCConfig;
 import org.rakam.config.ProjectConfig;
 import org.rakam.postgresql.report.JDBCQueryExecution;
 import org.rakam.presto.PrestoModule.UserConfig;
-import org.rakam.analysis.datasource.CustomDataSource;
-import org.rakam.analysis.datasource.JDBCSchemaConfig;
-import org.rakam.analysis.datasource.SupportedCustomDatabase;
 import org.rakam.report.QueryExecution;
 import org.rakam.report.QueryExecutor;
 import org.rakam.report.QuerySampling;
@@ -33,16 +29,10 @@ import org.rakam.util.RakamException;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
-
 import java.net.URI;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
-import java.util.TimeZone;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -58,7 +48,6 @@ import static org.rakam.presto.analysis.PrestoMaterializedViewService.MATERIALIZ
 import static org.rakam.presto.analysis.PrestoRakamRaptorMetastore.toType;
 import static org.rakam.util.JsonHelper.encodeAsBytes;
 import static org.rakam.util.ValidationUtil.checkCollection;
-import static org.rakam.util.ValidationUtil.checkProject;
 import static org.rakam.util.ValidationUtil.checkTableColumn;
 
 @Singleton
@@ -89,33 +78,34 @@ public class PrestoQueryExecutor
     }
 
     @Override
-    public QueryExecution executeRawQuery(String query, ZoneId timezone, Map<String, String> sessionParameters)
+    public QueryExecution executeRawQuery(String query, ZoneId timezone, Map<String, String> sessionParameters, String apiKey)
     {
-        return executeRawQuery(query, timezone, sessionParameters, null);
+        return executeRawQuery(query, timezone, sessionParameters, null, apiKey);
     }
 
     @Override
     public QueryExecution executeRawQuery(String query, Map<String, String> sessionProperties)
     {
-        return executeRawQuery(query, ZoneOffset.UTC, sessionProperties, null);
+        return executeRawQuery(query, ZoneOffset.UTC, sessionProperties, null, null);
     }
 
     @Override
     public QueryExecution executeRawStatement(String query, Map<String, String> sessionProperties)
     {
-        return executeRawStatement(query, ZoneOffset.UTC, sessionProperties, null);
+        return executeRawStatement(query, ZoneOffset.UTC, sessionProperties, null, null, true);
     }
 
-    public QueryExecution executeRawStatement(String query, ZoneId timezone, Map<String, String> sessionProperties, String catalog)
+    public QueryExecution executeRawStatement(String query, ZoneId timezone, Map<String, String> sessionProperties, String catalog, String user, boolean update)
     {
-        return internalExecuteRawQuery(query, createSession(catalog, timezone, sessionProperties));
+        return internalExecuteRawQuery(query, createSession(catalog, timezone, sessionProperties, user), update);
     }
 
-    public ClientSession createSession(String catalog, ZoneId timezone, Map<String, String> sessionProperties) {
+    public ClientSession createSession(String catalog, ZoneId timezone, Map<String, String> sessionProperties, String user)
+    {
         return new ClientSession(
                 prestoConfig.getAddress(),
+                user == null ? "rakam" : user,
                 "rakam",
-                "api-server",
                 null,
                 catalog == null ? "default" : catalog,
                 "default",
@@ -125,7 +115,7 @@ public class PrestoQueryExecutor
                 null, false, new Duration(1, TimeUnit.MINUTES));
     }
 
-    public QueryExecution executeRawQuery(String query, ZoneId timezone, Map<String, String> sessionProperties, String catalog)
+    public QueryExecution executeRawQuery(String query, ZoneId timezone, Map<String, String> sessionProperties, String catalog, String apiKey)
     {
         if (sessionProperties.containsKey("external.source_options")) {
             String encodedKey = sessionProperties.get("external.source_options");
@@ -146,7 +136,7 @@ public class PrestoQueryExecutor
             }
         }
 
-        return executeRawStatement(query, timezone, sessionProperties, catalog);
+        return executeRawStatement(query, timezone, sessionProperties, catalog, apiKey, false);
     }
 
     private QueryExecution getSingleQueryExecution(String query, DataSourceType type)
@@ -198,9 +188,9 @@ public class PrestoQueryExecutor
                 builder.toString(), false, Optional.empty(), false);
     }
 
-    public PrestoQueryExecution internalExecuteRawQuery(String query, ClientSession clientSession)
+    public PrestoQueryExecution internalExecuteRawQuery(String query, ClientSession clientSession, boolean update)
     {
-        return new PrestoQueryExecution(clientSession, query);
+        return new PrestoQueryExecution(clientSession, query, update);
     }
 
     @Override
@@ -216,7 +206,7 @@ public class PrestoQueryExecutor
         else if ("materialized".equals(prefix)) {
             return getTableReference(project, MATERIALIZED_VIEW_PREFIX + suffix, sample);
         }
-        else if ("collection".equals(prefix) || (prefix == null && !"_users".equals(suffix) && !"_all".equals(suffix))) {
+        else if ("collection".equals(prefix) || (prefix == null && !"users".equals(suffix) && !"_all".equals(suffix))) {
             return getTableReference(project, suffix, sample);
         }
         else {
@@ -231,7 +221,7 @@ public class PrestoQueryExecutor
 
             DataSourceType dataSourceType;
 
-            if (prefix == null && userJdbcConfig != null && suffix.equals("_users")) {
+            if (prefix == null && userJdbcConfig != null && suffix.equals("users")) {
                 URI uri = URI.create(userJdbcConfig.getUrl().substring(5));
                 JDBCSchemaConfig source = new JDBCSchemaConfig()
                         .setDatabase(uri.getPath().substring(1).split("\\?", 2)[0])

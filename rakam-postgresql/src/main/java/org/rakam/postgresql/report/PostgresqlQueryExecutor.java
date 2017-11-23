@@ -6,6 +6,7 @@ import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.Statement;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.inject.name.Named;
 import io.airlift.log.Logger;
 import org.rakam.analysis.JDBCPoolDataSource;
@@ -23,7 +24,6 @@ import org.rakam.util.RakamException;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
-
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.ZoneId;
@@ -32,19 +32,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.function.Function;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.EXPECTATION_FAILED;
-import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static java.lang.String.format;
 import static java.util.Optional.ofNullable;
-import static org.rakam.util.ValidationUtil.checkCollection;
-import static org.rakam.util.ValidationUtil.checkLiteral;
-import static org.rakam.util.ValidationUtil.checkProject;
-import static org.rakam.util.ValidationUtil.checkTableColumn;
+import static org.rakam.util.ValidationUtil.*;
 
 // forbid crosstab, dblink
 public class PostgresqlQueryExecutor
@@ -55,7 +52,10 @@ public class PostgresqlQueryExecutor
     public final static String CONTINUOUS_QUERY_PREFIX = "$view_";
 
     private final JDBCPoolDataSource connectionPool;
-    protected static final ExecutorService QUERY_EXECUTOR = Executors.newWorkStealingPool();
+    protected static final ExecutorService QUERY_EXECUTOR = new ThreadPoolExecutor(0, 1000,
+            60L, TimeUnit.SECONDS,
+            new SynchronousQueue<>(), new ThreadFactoryBuilder()
+            .setNameFormat("jdbc-query-executor").build());
     private final Metastore metastore;
     private final boolean userServiceIsPostgresql;
     private final CustomDataSourceService customDataSource;
@@ -89,7 +89,7 @@ public class PostgresqlQueryExecutor
     }
 
     @Override
-    public QueryExecution executeRawQuery(String query, ZoneId zoneId, Map<String, String> sessionParameters)
+    public QueryExecution executeRawQuery(String query, ZoneId zoneId, Map<String, String> sessionParameters, String apiKey)
     {
         String remotedb = sessionParameters.get("remotedb");
         if (remotedb != null) {
@@ -101,7 +101,7 @@ public class PostgresqlQueryExecutor
     @Override
     public QueryExecution executeRawQuery(String query, Map<String, String> sessionParameters)
     {
-        return executeRawQuery(query, null, sessionParameters);
+        return executeRawQuery(query, null, sessionParameters, null);
     }
 
     @Override
@@ -132,16 +132,7 @@ public class PostgresqlQueryExecutor
                         throw new RakamException("remotefile schema doesn't exist in Postgresql deployment", BAD_REQUEST);
                     }
 
-                    CustomDataSource dataSource;
-                    try {
-                        dataSource = customDataSource.getDatabase(project, prefix);
-                    }
-                    catch (RakamException e) {
-                        if (e.getStatusCode() == NOT_FOUND) {
-                            throw new RakamException("Schema does not exist: " + prefix, BAD_REQUEST);
-                        }
-                        throw e;
-                    }
+                    CustomDataSource dataSource = customDataSource.getDatabase(project, prefix);
 
                     String remoteDb = sessionParameters.get("remotedb");
                     List<CustomDataSource> state;
@@ -163,7 +154,7 @@ public class PostgresqlQueryExecutor
                     return checkProject(prefix, '"') + "." + checkCollection(name.getSuffix());
             }
         }
-        else if (name.getSuffix().equals("users") || name.getSuffix().equals("_users")) {
+        else if (name.getSuffix().equals("users")) {
             if (userServiceIsPostgresql) {
                 return checkProject(project, '"') + "._users";
             }

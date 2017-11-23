@@ -291,19 +291,20 @@ public abstract class AbstractEventExplorer
 
         if (intermediateAggregation.isPresent()) {
             if (grouping != null && grouping.type == COLUMN && segment.type == COLUMN) {
+                boolean segmentRanked = !segment.equals(DEFAULT_SEGMENT);
                 query = format(" SELECT " +
                                 " CASE WHEN group_rank > 15 THEN 'Others' ELSE cast(%s as varchar) END,\n" +
-                                " CASE WHEN segment_rank > 20 THEN 'Others' ELSE cast(%s as varchar) END,\n" +
+                                " %s " +
                                 " %s FROM (\n" +
                                 "   SELECT *,\n" +
-                                "          row_number() OVER (ORDER BY %s DESC) AS group_rank,\n" +
-                                "          row_number() OVER (PARTITION BY %s ORDER BY value DESC) AS segment_rank\n" +
+                                "          %s" +
+                                "          row_number() OVER (ORDER BY %s DESC) AS group_rank\n" +
                                 "   FROM (%s) as data GROUP BY 1, 2, 3) as data GROUP BY 1, 2 ORDER BY 3 DESC",
                         checkTableColumn(getColumnReference(grouping) + "_group"),
-                        checkTableColumn(getColumnReference(segment) + "_segment"),
+                        format(segmentRanked ? " CASE WHEN segment_rank > 20 THEN 'Others' ELSE cast(%s as varchar) END,\n" : "cast(%s as varchar),", checkTableColumn(getColumnReference(segment) + "_segment")),
                         format(convertSqlFunction(intermediateAggregation.get(), measure.aggregation), "value"),
+                        segmentRanked ? format("row_number() OVER (PARTITION BY %s ORDER BY value DESC) AS segment_rank,\n", checkCollection(format(getColumnReference(grouping), "value") + "_group")) : "",
                         format(convertSqlFunction(intermediateAggregation.get(), measure.aggregation), "value"),
-                        checkCollection(format(getColumnReference(grouping), "value") + "_group"),
                         computeQuery);
             }
             else {
@@ -419,8 +420,6 @@ public abstract class AbstractEventExplorer
             LocalDate endDate,
             ZoneId timezone)
     {
-        checkProject(project);
-
         if (collections.isPresent() && collections.get().isEmpty()) {
             return CompletableFuture.completedFuture(QueryResult.empty());
         }
@@ -442,7 +441,7 @@ public abstract class AbstractEventExplorer
             TimestampTransformation timestampTransformation = aggregationMethod.get();
 
             query = format("select collection, %s as %s, cast(sum(total) as bigint) from (%s) data where %s group by 1, 2 order by 2 desc",
-                    aggregationMethod.get() == HOUR ? "_time" : format(timestampMapping.get(timestampTransformation), "_time"),
+                    format(timestampMapping.get(timestampTransformation), "_time"),
                     aggregationMethod.get(),
                     sourceTable(collections),
                     timePredicate);
@@ -454,11 +453,11 @@ public abstract class AbstractEventExplorer
 
         QueryExecution collection;
         try {
-            collection = executor.executeQuery(project, query, Optional.empty(), "collection", timezone, 20000);
+            collection = executor.executeQuery(project, query, Optional.empty(), null, timezone, 20000);
         }
         catch (MaterializedViewNotExists e) {
             new EventExplorerListener(projectConfig, materializedViewService).createTable(project);
-            collection = executor.executeQuery(project, query, Optional.empty(), "collection", timezone, 20000);
+            collection = executor.executeQuery(project, query, Optional.empty(), null, timezone, 20000);
         }
 
         return collection.getResult().thenApply(result -> {

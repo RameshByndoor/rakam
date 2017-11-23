@@ -50,23 +50,25 @@ import org.rakam.http.ForHttpServer;
 import org.rakam.http.HttpServerConfig;
 import org.rakam.http.OptionMethodHttpService;
 import org.rakam.http.WebServiceModule;
-import org.rakam.http.WebServiceModule.ProjectPermissionParameterFactory;
 import org.rakam.plugin.EventMapper;
 import org.rakam.plugin.InjectionHook;
-import org.rakam.plugin.RAsyncHttpClient;
+import org.rakam.plugin.LockServiceProvider;
+import org.rakam.server.http.*;
+import org.rakam.util.RAsyncHttpClient;
 import org.rakam.plugin.RakamModule;
 import org.rakam.plugin.user.AbstractUserService;
 import org.rakam.plugin.user.UserStorage;
 import org.rakam.plugin.user.mailbox.UserMailboxStorage;
-import org.rakam.server.http.HttpRequestHandler;
-import org.rakam.server.http.HttpService;
-import org.rakam.server.http.WebSocketService;
 import org.rakam.util.NotFoundHandler;
+import org.rakam.util.javascript.JSCodeJDBCLoggerService;
+import org.rakam.util.javascript.JSLoggerService;
+import org.rakam.util.lock.LockService;
 
 import javax.inject.Inject;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.time.Clock;
 import java.util.Properties;
@@ -88,7 +90,8 @@ public final class ServiceStarter
             URL resource = ServiceStarter.class.getResource("/git.properties");
             if (resource == null) {
                 LOGGER.warn("git.properties doesn't exist.");
-            } else {
+            }
+            else {
                 inputStream = resource.openStream();
                 properties.load(inputStream);
             }
@@ -182,7 +185,7 @@ public final class ServiceStarter
         {
             binder.bind(Clock.class).toInstance(Clock.systemUTC());
 //            binder.bind(FlywayExecutor.class).asEagerSingleton();
-
+            binder.bind(LockService.class).toProvider(LockServiceProvider.class);
             binder.bind(FieldDependency.class).toProvider(FieldDependencyProvider.class).in(Scopes.SINGLETON);
 
             Multibinder.newSetBinder(binder, EventMapper.class);
@@ -233,7 +236,6 @@ public final class ServiceStarter
             httpServices.addBinding().to(ProjectHttpService.class);
             httpServices.addBinding().to(MaterializedViewHttpService.class);
             httpServices.addBinding().to(EventCollectionHttpService.class);
-            httpServices.addBinding().to(WebHookHttpService.class);
             httpServices.addBinding().to(ContinuousQueryHttpService.class);
             httpServices.addBinding().to(QueryHttpService.class);
             httpServices.addBinding().to(OptionMethodHttpService.class);
@@ -247,11 +249,11 @@ public final class ServiceStarter
 
             binder.bind(SchemaChecker.class).asEagerSingleton();
 
+            binder.bind(JSLoggerService.class).to(JSCodeJDBCLoggerService.class);
+
             binder.bind(RAsyncHttpClient.class)
                     .annotatedWith(Names.named("rakam-client"))
-                    .toProvider(() -> {
-                        return RAsyncHttpClient.create(1000 * 60 * 10, "rakam-custom-script");
-                    })
+                    .toProvider(() -> RAsyncHttpClient.create(1000 * 60 * 10, "rakam-custom-script"))
                     .in(Scopes.SINGLETON);
 
             OptionalBinder.newOptionalBinder(binder,
@@ -281,7 +283,8 @@ public final class ServiceStarter
         @Override
         public CustomParameter get()
         {
-            return new CustomParameter("project", new ProjectPermissionParameterFactory(apiKeyService));
+            return new CustomParameter("project",
+                    method -> new WebServiceModule.ProjectPermissionIRequestParameter(apiKeyService, method));
         }
     }
 

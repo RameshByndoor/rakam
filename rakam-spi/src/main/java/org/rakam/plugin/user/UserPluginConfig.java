@@ -13,18 +13,29 @@ public class UserPluginConfig {
     private boolean mailboxEnabled;
     private String mailBoxStorageModule;
     private String sessionColumn;
-    private boolean enableUserMapping = false;
+    private boolean enableUserMapping;
     private String identifierColumn;
     private boolean funnelAnalysisEnabled = true;
     private boolean retentionAnalysisEnabled = true;
     private Iterable<String> actions;
     private boolean automationEnabled;
     private boolean abTestingEnabled;
+    private boolean enabled;
 
     @Config("plugin.user.storage.identifier-column")
     public UserPluginConfig setIdentifierColumn(String colName) {
         this.identifierColumn = colName;
         return this;
+    }
+
+    @Config("plugin.user.enabled")
+    public UserPluginConfig setEnabled(boolean enabled) {
+        this.enabled = enabled;
+        return this;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
     }
 
     @Config("plugin.user.enable-user-mapping")
@@ -81,6 +92,7 @@ public class UserPluginConfig {
     public void setAutomationEnabled(boolean automationEnabled) {
         this.automationEnabled = automationEnabled;
     }
+
     public boolean getAutomationEnabled() {
         return automationEnabled;
     }

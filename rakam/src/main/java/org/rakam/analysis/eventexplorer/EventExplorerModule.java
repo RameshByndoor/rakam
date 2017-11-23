@@ -10,15 +10,17 @@ import org.rakam.config.MetadataConfig;
 import org.rakam.plugin.EventMapper;
 import org.rakam.plugin.RakamModule;
 import org.rakam.plugin.TimestampEventMapper;
-import org.rakam.report.eventexplorer.EventExplorerConfig;
 import org.rakam.server.http.HttpService;
 import org.rakam.util.ConditionalModule;
 
 @AutoService(RakamModule.class)
 @ConditionalModule(config = "event-explorer.enabled", value = "true")
-public class EventExplorerModule extends RakamModule {
+public class EventExplorerModule
+        extends RakamModule
+{
     @Override
-    protected void setup(Binder binder) {
+    protected void setup(Binder binder)
+    {
         Multibinder<HttpService> httpServices = Multibinder.newSetBinder(binder, HttpService.class);
         httpServices.addBinding().to(EventExplorerHttpService.class);
 
@@ -28,19 +30,18 @@ public class EventExplorerModule extends RakamModule {
         Multibinder<Tag> tags = Multibinder.newSetBinder(binder, Tag.class);
         tags.addBinding().toInstance(new Tag().name("event-explorer").description("Event Explorer").externalDocs(MetadataConfig.centralDocs));
 
-        EventExplorerConfig eventExplorerConfig = buildConfigObject(EventExplorerConfig.class);
-        if (eventExplorerConfig.getPreComputed()) {
-            binder.bind(EventExplorerListener.class).asEagerSingleton();
-        }
+        binder.bind(EventExplorerListener.class).asEagerSingleton();
     }
 
     @Override
-    public String name() {
+    public String name()
+    {
         return "Event Explorer Module";
     }
 
     @Override
-    public String description() {
+    public String description()
+    {
         return "It allows analyzing and visualizing events via a simple interface.";
     }
 }

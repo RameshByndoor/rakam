@@ -1,7 +1,7 @@
 [![Build Status](https://travis-ci.org/rakam-io/rakam.svg?branch=master)](https://travis-ci.org/rakam-io/rakam) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [<img alt="Deploy" src="http://www.herokucdn.com/deploy/button.png" height="21">](https://dashboard.heroku.com/new?button-url=https%3A%2F%2Fgithub.com%2Frakam-io%2Frakam&template=https%3A%2F%2Fgithub.com%2Frakam-io%2Frakam) [![Install on DigitalOcean](http://installer.71m.us/button.svg)](http://installer.71m.us/install?url=https://github.com/rakam-io/rakam)
+
 Rakam
 =======
-[![Join user group at https://groups.google.com/forum/#!forum/rakam](https://img.shields.io/badge/google-groups-green.svg?style=flat)](https://groups.google.com/forum/#!forum/rakam)
 
 Rakam is an analytics platform that allows you to create your analytics services.
 
@@ -12,12 +12,12 @@ Rakam is a modular analytics platform that gives you a set of features to create
 Typical workflow of using Rakam:
 * Collect data from multiple sources with **[trackers, client libraries, webhooks, tasks etc.](//rakam.io/doc/buremba/rakam-wiki/master/Collecting-Events)**
 * Enrich and sanitize your event data with **[event mappers](//rakam.io/doc/buremba/rakam-wiki/master/Event-Mappers)**
-* Process data in real-time using **[real-time modules](//rakam.io/doc/buremba/rakam-wiki/master/Modules#realtimeanalyticsmodulesubapidocapirakamiorealtimesub)** (pre-aggregate data via stream processing using SQL!),
 * Store data in a data warehouse to analyze it later. (Postgresql, HDFS, S3 etc.)
 * Analyze your event data with your SQL queries and integrated rich analytics APIs (**[funnel, retention, real-time reports](//rakam.io/doc/buremba/rakam-wiki/master/Analyze-Data)**, **[event streams](//rakam.io/doc/Modules#eventstreammodulesubapidocgetrakamcomapitagsstreamsub)**)
 * Analyze your users with **[integrated CRM tool](//rakam.io/doc/buremba/rakam-wiki/master/Modules#customeranalyticsmodulesubapidocapirakamiousersub)**
-* Create custom dashboards and real-time reports using **[Rakam BI](https://rakam.io/)**
 * **[Develop your own modules](//rakam.io/doc/buremba/rakam-wiki/master/Developing-Modules)** for Rakam to customize it for your needs.
+
+We also provide user interface for Rakam as a separate product called [Rakam UI](https://app.rakam.io). You can create custom reports with SQL, dashboards, funnel and retention reports via [Rakam UI](https://app.rakam.io).
 
 All these features come with a single box, you just need to specify which modules you want to use using a configuration file (config.properties) and Rakam will do the rest for you.
 We also provide cloud deployment tools for scaling your Rakam cluster easily.
@@ -45,7 +45,7 @@ Digitalocean installer uses Docker under the hood. It will install Docker on you
 
 Run the following command to start a Postgresql server in docker container and Rakam API in your local environment.
 
-    docker run -d --name rakam-db -e POSTGRES_PASSWORD=dummy -e POSTGRES_USER=rakam postgres:9.6.1 && docker run --link rakam-db --name rakam -p 9999:9999 -e RAKAM_CONFIG_LOCK-KEY=mylockKey buremba/rakam
+    docker run -d --name rakam-db -e POSTGRES_PASSWORD=dummy -e POSTGRES_USER=rakam postgres:10.1 && docker run --link rakam-db --name rakam -p 9999:9999 -e RAKAM_CONFIG_LOCK__KEY=mylockKey -e RAKAM_CONFIG_STORE_ADAPTER_POSTGRESQL_URL=postgres://rakam:dummy@rakam-db:5432/rakam buremba/rakam
 
 After docker container is started, visit [http://127.0.0.1:9999](http://127.0.0.1:9999) and follow the instructions. You can also register your local Rakam API to Rakam BI at
 [http://app.rakam.io/cluster/register](http://app.rakam.io/cluster/register?apiUrl=http:%2F%2F127.0.0.1:9999&lockKey=mylockKey)
@@ -56,19 +56,23 @@ We also provide docker-compose definition for Postgresql backend. Create a `dock
     version: '2'
     services:
       rakam-db:
-        image: postgres:9.6.1
+        image: postgres:10.1
         environment:
           - POSTGRES_PASSWORD=dummy
           - POSTGRES_USER=rakam
       rakam-api:
         image: buremba/rakam
+        environment:
+          - RAKAM_CONFIG_STORE_ADAPTER_POSTGRESQL_URL=postgres://rakam:dummy@rakam-db:5432/rakam
+          - RAKAM_CONFIG_LOCK__KEY=mylockKey
         ports:
           - "9999:9999"
         depends_on:
           - rakam-db
 
 You can set config variables for Rakam instance using environment variables. All properties in config.properties file can be set via environment variable `RAKAM_CONFIG_property_name_dots_replaced_by_underscore`.
-For example, if you want to set `store.adapter=postgresql` you need to set environment variable `RAKAM_CONFIG_STORE_ADAPTER=postgresql`.
+For example, if you want to set `store.adapter=postgresql` you need to set environment variable `RAKAM_CONFIG_STORE_ADAPTER=postgresql`. Also the dash `-` is replaced by double underscore character `__`. 
+Therefore the environment variable `RAKAM_CONFIG_LOCK__KEY` corresponds to `lock-key` config property. 
 
 Dockerfile will generate `config.properties` file from environment variables in docker container that start with `RAKAM_CONFIG` prefix.
 

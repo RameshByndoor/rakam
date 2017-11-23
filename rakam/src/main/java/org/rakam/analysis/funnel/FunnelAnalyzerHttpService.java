@@ -14,12 +14,14 @@
 package org.rakam.analysis.funnel;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.google.common.collect.ImmutableMap;
 import io.airlift.log.Logger;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.rakam.analysis.FunnelQueryExecutor;
 import org.rakam.analysis.FunnelQueryExecutor.FunnelStep;
 import org.rakam.analysis.FunnelQueryExecutor.FunnelWindow;
 import org.rakam.analysis.QueryHttpService;
+import org.rakam.collection.FieldType;
 import org.rakam.report.QueryResult;
 import org.rakam.server.http.HttpService;
 import org.rakam.server.http.RakamHttpRequest;
@@ -42,9 +44,12 @@ import javax.ws.rs.Path;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -83,6 +88,7 @@ public class FunnelAnalyzerHttpService
         queryService.handleServerSentQueryExecution(request, FunnelQuery.class, (project, query) -> funnelQueryExecutor.query(project,
                 query.steps,
                 Optional.ofNullable(query.dimension),
+                Optional.ofNullable(query.segment),
                 query.startDate,
                 query.endDate,
                 Optional.ofNullable(query.window),
@@ -121,6 +127,7 @@ public class FunnelAnalyzerHttpService
         CompletableFuture<QueryResult> result = funnelQueryExecutor.query(project,
                 query.steps,
                 Optional.ofNullable(query.dimension),
+                Optional.ofNullable(query.segment),
                 query.startDate,
                 query.endDate,
                 Optional.ofNullable(query.window),
@@ -136,10 +143,28 @@ public class FunnelAnalyzerHttpService
         return result;
     }
 
+    @GET
+    @Path("/segments")
+    public Map<FieldType, List<FunnelSegment>> segments()
+    {
+        return ImmutableMap.of(FieldType.TIMESTAMP,
+                Arrays.stream(FunnelQueryExecutor.FunnelTimestampSegments.values()).map(e -> new FunnelSegment(e.name(), e.getDisplayName())).collect(Collectors.toList()));
+    }
+
+    public static class FunnelSegment {
+        public final String value;
+        public final String displayName;
+        public FunnelSegment(String value, String displayName) {
+            this.value = value;
+            this.displayName = displayName;
+        }
+    }
+
     private static class FunnelQuery
     {
         public final List<FunnelStep> steps;
         public final String dimension;
+        public final String segment;
         public final LocalDate startDate;
         public final FunnelWindow window;
         public final LocalDate endDate;
@@ -152,6 +177,7 @@ public class FunnelAnalyzerHttpService
         @JsonCreator
         public FunnelQuery(@ApiParam("steps") List<FunnelStep> steps,
                 @ApiParam(value = "dimension", required = false) String dimension,
+                @ApiParam(value = "segment", required = false) String segment,
                 @ApiParam("startDate") LocalDate startDate,
                 @ApiParam(value = "window", required = false) FunnelWindow window,
                 @ApiParam("endDate") LocalDate endDate,
@@ -163,6 +189,7 @@ public class FunnelAnalyzerHttpService
         {
             this.steps = checkNotNull(steps, "steps field is required");
             this.dimension = dimension;
+            this.segment = segment;
             this.startDate = startDate;
             this.endDate = endDate;
             this.strictOrdering = strictOrdering;

@@ -31,45 +31,36 @@ import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.Handle;
 import org.skife.jdbi.v2.ResultIterator;
 import org.skife.jdbi.v2.TransactionStatus;
+import org.skife.jdbi.v2.exceptions.CallbackFailedException;
 import org.skife.jdbi.v2.exceptions.UnableToExecuteStatementException;
 import org.skife.jdbi.v2.tweak.ResultSetMapper;
 import org.skife.jdbi.v2.util.BooleanMapper;
 import org.skife.jdbi.v2.util.IntegerMapper;
 import org.skife.jdbi.v2.util.StringMapper;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import javax.mail.MessagingException;
-
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.nio.charset.StandardCharsets;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.sql.*;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
-import java.util.AbstractMap;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.google.common.base.Charsets.UTF_8;
-import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
-import static io.netty.handler.codec.http.HttpResponseStatus.EXPECTATION_FAILED;
-import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
-import static io.netty.handler.codec.http.HttpResponseStatus.NOT_IMPLEMENTED;
-import static io.netty.handler.codec.http.HttpResponseStatus.PRECONDITION_REQUIRED;
-import static io.netty.handler.codec.http.HttpResponseStatus.UNAUTHORIZED;
+import static io.netty.handler.codec.http.HttpResponseStatus.*;
 import static java.lang.Boolean.TRUE;
 import static java.lang.String.format;
 import static java.time.temporal.ChronoUnit.HOURS;
@@ -151,7 +142,7 @@ public class WebUserService
             ps.executeUpdate();
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -271,11 +262,7 @@ public class WebUserService
 
         WebUser webuser = null;
 
-        try (
-                Handle handle = dbi.open()
-        )
-
-        {
+        try (Handle handle = dbi.open()) {
             try {
                 int id = handle.createStatement("INSERT INTO web_user (email, password, name, created_at, gender, user_locale, google_id, external) VALUES (:email, :password, :name, now(), :gender, :locale, :googleId, :external)")
                         .bind("email", email)
@@ -285,22 +272,23 @@ public class WebUserService
                         .bind("external", external)
                         .bind("googleId", googleId)
                         .bind("password", scrypt).executeAndReturnGeneratedKeys(IntegerMapper.FIRST).first();
-                webuser = new WebUser(id, email, name, false, ImmutableList.of());
+
+                webuser = new WebUser(id, email, name, false, Instant.now(), generateIntercomHash(email), ImmutableList.of());
             }
             catch (UnableToExecuteStatementException e) {
-                Map<String, Object> existingUser = handle.createQuery("SELECT created_at FROM web_user WHERE email = :email").bind("email", email).first();
+                Map<String, Object> existingUser = handle.createQuery("SELECT created_at FROM web_user WHERE lower(email) = lower(:email)").bind("email", email).first();
                 if (existingUser != null) {
                     if (existingUser.get("created_at") != null) {
                         throw new AlreadyExistsException("A user with same email address", EXPECTATION_FAILED);
                     }
                     else {
                         // somebody gave access for a project to this email address
-                        int id = handle.createStatement("UPDATE web_user SET password = :password, name = :name, created_at = now() WHERE email = :email")
+                        int id = handle.createStatement("UPDATE web_user SET password = :password, name = :name, created_at = now() WHERE lower(email) = lower(:email)")
                                 .bind("email", email)
                                 .bind("name", name)
                                 .bind("password", scrypt).executeAndReturnGeneratedKeys(IntegerMapper.FIRST).first();
                         if (id > 0) {
-                            webuser = new WebUser(id, email, name, false, ImmutableList.of());
+                            webuser = new WebUser(id, email, name, false, Instant.now(), generateIntercomHash(email), ImmutableList.of());
                         }
                     }
                 }
@@ -308,25 +296,6 @@ public class WebUserService
                 if (webuser == null) {
                     throw e;
                 }
-            }
-        }
-
-        try {
-            sendMail(welcomeTitleCompiler, welcomeTxtCompiler,
-                    welcomeHtmlCompiler, email,
-                    ImmutableMap.of(
-                            "name", Optional.ofNullable(name).orElse("there"),
-                            "product_name", "Rakam",
-                            "siteUrl", mailConfig.getSiteUrl().toExternalForm()));
-        }
-
-        catch (
-                RakamException e
-                )
-
-        {
-            if (e.getStatusCode() != NOT_IMPLEMENTED) {
-                throw e;
             }
         }
 
@@ -340,6 +309,30 @@ public class WebUserService
                     .bind("id", id)
                     .bind("name", name)
                     .executeAndReturnGeneratedKeys(IntegerMapper.FIRST).first();
+        }
+    }
+
+    public String generateIntercomHash(String email)
+    {
+        if (config.getIntercomSecretKey() == null) {
+            return null;
+        }
+
+        try {
+            Mac sha256_HMAC = Mac.getInstance("HmacSHA256");
+            SecretKeySpec secret_key = new SecretKeySpec(config.getIntercomSecretKey().getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+            sha256_HMAC.init(secret_key);
+
+            byte[] hash = (sha256_HMAC.doFinal(email.getBytes()));
+            StringBuffer result = new StringBuffer();
+            for (byte b : hash) {
+                result.append(String.format("%02X", b));
+            }
+
+            return result.toString();
+        }
+        catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -389,7 +382,7 @@ public class WebUserService
             List<Map<String, Object>> list = handle.createQuery("SELECT api_key.id, api_key.master_key FROM web_user_api_key_permission permission " +
                     "JOIN web_user_api_key api_key ON (api_key.id = permission.api_key_id) " +
                     "WHERE project_id = :project AND permission.user_id = " +
-                    "(SELECT id FROM web_user WHERE email = :email)")
+                    "(SELECT id FROM web_user WHERE lower(email) = lower(:email))")
                     .bind("project", project)
                     .bind("email", email).list();
 
@@ -439,7 +432,7 @@ public class WebUserService
         final String scrypt = SCryptUtil.scrypt(newPassword, 2 << 14, 8, 1);
 
         try (Handle handle = dbi.open()) {
-            int execute = handle.createStatement("UPDATE web_user SET password = :password WHERE email = :email")
+            int execute = handle.createStatement("UPDATE web_user SET password = :password WHERE lower(email) = lower(:email)")
                     .bind("email", split[1])
                     .bind("password", scrypt).execute();
             if (execute == 0) {
@@ -609,7 +602,7 @@ public class WebUserService
                 throw new RakamException("You do not have master key permission", UNAUTHORIZED);
             }
 
-            Integer newUserId = handle.createQuery("SELECT id FROM web_user WHERE email = :email").bind("email", email)
+            Integer newUserId = handle.createQuery("SELECT id FROM web_user WHERE lower(email) = lower(:email)").bind("email", email)
                     .map(IntegerMapper.FIRST).first();
 
             if (newUserId == null) {
@@ -619,7 +612,6 @@ public class WebUserService
             int exists = handle.createStatement("UPDATE web_user_api_key_permission SET " +
                     "read_permission = :readPermission, write_permission = :writePermission, master_permission = :masterPermission " +
                     "WHERE user_id = :newUserId")
-                    .bind("mainUser", userId)
                     .bind("newUserId", newUserId)
                     .bind("readPermission", readPermission)
                     .bind("writePermission", writePermission)
@@ -690,7 +682,7 @@ public class WebUserService
                 sendNewUserMail(projectConfigurations.name, email);
             }
             catch (Exception e) {
-                Map.Entry<Integer, Boolean> element = handle.createQuery("SELECT id, password is null FROM web_user WHERE email = :email").bind("email", email)
+                Map.Entry<Integer, Boolean> element = handle.createQuery("SELECT id, password is null FROM web_user WHERE lower(email) = lower(:email)").bind("email", email)
                         .map((ResultSetMapper<Map.Entry<Integer, Boolean>>) (index, r, ctx) -> new AbstractMap.SimpleImmutableEntry<>(r.getInt(1), r.getBoolean(2))).first();
                 newUserId = element.getKey();
 
@@ -713,32 +705,40 @@ public class WebUserService
         }
 
         final int finalNewUserId = newUserId;
-        dbi.inTransaction((Handle handle, TransactionStatus transactionStatus) -> {
-            Integer apiKeyId = saveApiKeys(handle, userId, projectId, keys.readKey(), keys.writeKey(), keys.masterKey());
+        try {
+            dbi.inTransaction((Handle handle, TransactionStatus transactionStatus) -> {
+                Integer apiKeyId = saveApiKeys(handle, userId, projectId, keys.readKey(), keys.writeKey(), keys.masterKey());
 
-            int exists = handle.createStatement("UPDATE web_user_api_key_permission SET " +
-                    "read_permission = :readPermission, write_permission = :writePermission, master_permission = :masterPermission " +
-                    "WHERE user_id = :newUserId AND (SELECT bool_or(true) FROM web_user_api_key WHERE user_id = :newUserId AND project_id = :project)")
-                    .bind("mainUser", userId)
-                    .bind("newUserId", finalNewUserId)
-                    .bind("readPermission", readPermission)
-                    .bind("writePermission", writePermission)
-                    .bind("masterPermission", masterPermission)
-                    .bind("project", projectId).execute();
-
-            if (exists == 0) {
-                handle.createStatement("INSERT INTO web_user_api_key_permission (api_key_id, user_id, read_permission, write_permission, master_permission, scope_expression) " +
-                        " VALUES (:apiKeyId, :newUserId, :readPermission, :writePermission, :masterPermission, :scope)")
-                        .bind("apiKeyId", apiKeyId)
+                boolean exists = handle.createQuery("SELECT true FROM web_user_api_key_permission " +
+                        "WHERE user_id = :newUserId AND api_key_id IN (SELECT id FROM web_user_api_key WHERE project_id = :project)")
                         .bind("newUserId", finalNewUserId)
                         .bind("readPermission", readPermission)
                         .bind("writePermission", writePermission)
                         .bind("masterPermission", masterPermission)
-                        .bind("scope", scope_expression).execute();
-            }
+                        .bind("project", projectId).first() != null;
 
-            return null;
-        });
+                if (!exists) {
+                    handle.createStatement("INSERT INTO web_user_api_key_permission (api_key_id, user_id, read_permission, write_permission, master_permission, scope_expression) " +
+                            " VALUES (:apiKeyId, :newUserId, :readPermission, :writePermission, :masterPermission, :scope)")
+                            .bind("apiKeyId", apiKeyId)
+                            .bind("newUserId", finalNewUserId)
+                            .bind("readPermission", readPermission)
+                            .bind("writePermission", writePermission)
+                            .bind("masterPermission", masterPermission)
+                            .bind("scope", scope_expression).execute();
+                }
+                else {
+                    throw new RakamException("The user (" + email + ") already has access", BAD_REQUEST);
+                }
+
+                return null;
+            });
+        }
+        catch (CallbackFailedException e) {
+            if (e.getCause() instanceof RakamException) {
+                throw (RakamException) e.getCause();
+            }
+        }
     }
 
     public Integer saveApiKeys(int user, int projectId, String readKey, String writeKey, String masterKey)
@@ -793,7 +793,7 @@ public class WebUserService
         String passwordInDb;
         try (Handle handle = dbi.open()) {
             data = handle
-                    .createQuery("SELECT id, name, password, read_only FROM web_user WHERE email = :email")
+                    .createQuery("SELECT id, name, password, read_only, created_at FROM web_user WHERE lower(email) = lower(:email)")
                     .bind("email", email).first();
 
             if (authService != null) {
@@ -818,7 +818,7 @@ public class WebUserService
             if (!Objects.equals(password, passwordInDb)) {
                 try (Handle handle = dbi.open()) {
                     int updated = handle
-                            .createStatement("UPDATE web_user SET password = :password WHERE email = :email")
+                            .createStatement("UPDATE web_user SET password = :password WHERE lower(email) = lower(:email)")
                             .bind("password", password).execute();
                     if (updated == 0) {
                         throw new IllegalStateException();
@@ -841,8 +841,9 @@ public class WebUserService
             String name = (String) data.get("name");
             int id = (int) data.get("id");
             boolean readOnly = (boolean) data.get("read_only");
+            Timestamp createdAt = (Timestamp) data.get("created_at");
             projects = getUserApiKeys(handle, id);
-            return Optional.of(new WebUser(id, email, name, readOnly, projects));
+            return Optional.of(new WebUser(id, email, name, readOnly, createdAt.toInstant(), generateIntercomHash(email), projects));
         }
     }
 
@@ -852,7 +853,7 @@ public class WebUserService
 
         try (Handle handle = dbi.open()) {
             final Map<String, Object> data = handle
-                    .createQuery("SELECT id, name, read_only FROM web_user WHERE email = :email")
+                    .createQuery("SELECT id, name, read_only, created_at FROM web_user WHERE lower(email) = lower(:email)")
                     .bind("email", email).first();
             if (data == null) {
                 return Optional.empty();
@@ -860,9 +861,10 @@ public class WebUserService
             String name = (String) data.get("name");
             int id = (int) data.get("id");
             boolean readOnly = (boolean) data.get("read_only");
+            Timestamp createdAt = (Timestamp) data.get("created_at");
 
             projectDefinitions = getUserApiKeys(handle, id);
-            return Optional.of(new WebUser(id, email, name, readOnly, projectDefinitions));
+            return Optional.of(new WebUser(id, email, name, readOnly, createdAt.toInstant(), generateIntercomHash(email), projectDefinitions));
         }
     }
 
@@ -872,18 +874,19 @@ public class WebUserService
 
         try (Handle handle = dbi.open()) {
             final Map<String, Object> data = handle
-                    .createQuery("SELECT id, name, email, read_only FROM web_user WHERE id = :id")
+                    .createQuery("SELECT id, name, email, read_only, created_at FROM web_user WHERE id = :id")
                     .bind("id", id).first();
             if (data == null) {
                 return Optional.empty();
             }
             String name = (String) data.get("name");
             String email = (String) data.get("email");
+            Timestamp createdAt = (Timestamp) data.get("created_at");
             id = (int) data.get("id");
 
             projectDefinitions = getUserApiKeys(handle, id);
             return Optional.of(new WebUser(id, email, name,
-                    (Boolean) data.get("read_only"), projectDefinitions));
+                    (Boolean) data.get("read_only"), createdAt.toInstant(), generateIntercomHash(email), projectDefinitions));
         }
     }
 
